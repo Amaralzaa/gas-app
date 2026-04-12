@@ -29,7 +29,8 @@ export const authService = {
 
   async loginWithPhone(phone: string) {
     // Generate an internal email based on phone number for Supabase Auth
-    const internalEmail = `phone_${phone.replace(/\D/g, '')}@porto-gas.com`;
+    // Changed domain to bypass previously stuck test accounts safely after config update
+    const internalEmail = `guest_${phone.replace(/\D/g, '')}@gasexpress.app`;
     // For clients, we use a standard internal password for simulation in this phase
     const internalPassword = `GasPhoneAuth${phone.replace(/\D/g, '')}`;
 
@@ -57,17 +58,21 @@ export const authService = {
       if (signUpError) throw signUpError;
 
       if (signUpData.user) {
-        // Create profile
-        await supabase.from('profiles').insert({
-          id: signUpData.user.id,
-          email: internalEmail,
+        // Update profile instead of insert, as the row is usually created by a DB trigger
+        // which prevents explicit inserts via RLS policies.
+        const { error: profileError } = await supabase.from('profiles').update({
           name: 'Cliente',
           role: 'cliente',
           phone,
           points: 0,
           addresses: [],
           allowedTabs: []
-        });
+        }).eq('id', signUpData.user.id);
+
+        if (profileError) {
+          console.error('Info: Could not update profile automatically (RLS/Trigger)', profileError);
+          // We don't throw here to avoid blocking the login flow just because of profile metadata
+        }
       }
 
       return signUpData.user;
@@ -114,18 +119,17 @@ export const authService = {
     if (error) throw error;
 
     if (data.user) {
-      // Insert into profiles table (handled by DB trigger usually, but doing it manually for clarity)
+      // Update into profiles table (handled by DB trigger usually)
       const { error: profileError } = await supabase
         .from('profiles')
-        .insert({
-          id: data.user.id,
-          email,
+        .update({
           name,
           role,
           phone,
           points: 0,
           addresses: []
-        });
+        })
+        .eq('id', data.user.id);
 
       if (profileError) console.error('Error creating profile:', profileError);
     }

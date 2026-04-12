@@ -59,7 +59,7 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
     try {
       if (isRegistering) {
         if (!name.trim()) throw new Error('Por favor, informe seu nome.');
-        const user = await authService.signUp(email || `phone_${phone.replace(/\D/g, '')}@porto-gas.com`, name, 'cliente', phone);
+        const user = await authService.signUp(email || `guest_${phone.replace(/\D/g, '')}@gasexpress.app`, name, 'cliente', phone);
         if (user) {
           // Profile handled in service
         }
