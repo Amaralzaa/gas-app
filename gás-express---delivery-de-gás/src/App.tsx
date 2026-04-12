@@ -38,6 +38,7 @@ import { authService } from './services/authService';
 import { orderService } from './services/orderService';
 import { userService } from './services/userService';
 import { expenseService } from './services/expenseService';
+import { supabase } from './lib/supabase';
 
 // --- Components ---
 
@@ -57,20 +58,27 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
     setLoading(true);
 
     try {
+      let authUser: any = null;
+
       if (isRegistering) {
         if (!name.trim()) throw new Error('Por favor, informe seu nome.');
-        const user = await authService.signUp(email || `guest_${phone.replace(/\D/g, '')}@gasexpress.app`, name, 'cliente', phone);
-        if (user) {
-          // Profile handled in service
-        }
+        authUser = await authService.signUp(email || `guest_${phone.replace(/\D/g, '')}@gasexpress.app`, name, 'cliente', phone);
       } else {
         if (loginMethod === 'email') {
           if (!email.trim() || !password.trim()) throw new Error('E-mail e senha são obrigatórios.');
-          await authService.login(email, password);
+          authUser = await authService.login(email, password);
         } else {
           if (!phone.trim()) throw new Error('O número do WhatsApp é obrigatório.');
-          await authService.loginWithPhone(phone);
+          authUser = await authService.loginWithPhone(phone);
         }
+      }
+
+      // Directly fetch profile and set user — don't wait for onAuthStateChange
+      if (authUser) {
+        const appUser = await authService.getProfileForUser(
+          authUser.id, authUser.email, authUser.user_metadata
+        );
+        onLogin(appUser);
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao processar solicitação.');
@@ -247,23 +255,57 @@ export default function App() {
   const [initialTab, setInitialTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>('home');
   const [loading, setLoading] = useState(true);
 
-  // Sync Auth State
+  // Sync Auth State — check existing session on mount
   useEffect(() => {
-    const { data: { subscription } } = authService.onAuthStateChange((user) => {
-      setCurrentUser(user);
-      setLoading(false);
-    });
+    let cancelled = false;
+
+    // Check for existing session (does NOT trigger the auth lock)
+    const initSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user && !cancelled) {
+          const appUser = await authService.getProfileForUser(
+            session.user.id, session.user.email, session.user.user_metadata
+          );
+          setCurrentUser(appUser);
+        }
+      } catch (err) {
+        console.error('Error checking session:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
 
     // Handle deep-link / auto-login via ?phone=
     const params = new URLSearchParams(window.location.search);
     const phoneParam = params.get('phone');
     if (phoneParam) {
-      authService.loginWithPhone(phoneParam).catch(err => {
-        console.error('Auto-login failed:', err);
-      });
+      authService.loginWithPhone(phoneParam)
+        .then(async (user) => {
+          if (user && !cancelled) {
+            const appUser = await authService.getProfileForUser(
+              user.id, user.email, user.user_metadata
+            );
+            setCurrentUser(appUser);
+          }
+        })
+        .catch(err => console.error('Auto-login failed:', err))
+        .finally(() => { if (!cancelled) setLoading(false); });
+    } else {
+      initSession();
     }
 
-    return () => subscription.unsubscribe();
+    // Listen for sign-out events only
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Fetch initial data when user is logged in

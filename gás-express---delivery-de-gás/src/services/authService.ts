@@ -3,28 +3,67 @@ import { AppUser, UserRole } from '../types';
 
 export const authService = {
   async getCurrentUser(): Promise<AppUser | null> {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
 
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
+      // Use maybeSingle to avoid 406 errors on missing rows
+      const { data: profile, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
 
-    if (!profile) return null;
+      // Self-healing: If profile is missing but user is authenticated
+      if (!profile || error) {
+        console.log('Profile missing or error, attempting self-healing creation...');
+        const newProfile = {
+          id: user.id,
+          email: user.email,
+          name: user.user_metadata?.name || 'Usuário',
+          role: (user.user_metadata?.role as UserRole) || 'cliente',
+          phone: user.user_metadata?.phone || '',
+          points: 0,
+          addresses: [],
+          allowedTabs: []
+        };
 
-    return {
-      id: profile.id,
-      email: profile.email,
-      role: profile.role as UserRole,
-      name: profile.name,
-      phone: profile.phone,
-      points: profile.points,
-      addresses: profile.addresses || [],
-      location: profile.location,
-      allowedTabs: profile.allowedTabs || [],
-    };
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .upsert(newProfile);
+
+        if (insertError) {
+          console.error('Self-healing failed (RLS?):', insertError);
+          // Return a minimal user object even without a DB profile to allow the app to load
+          return {
+            id: user.id,
+            email: user.email,
+            role: (user.user_metadata?.role as UserRole) || 'cliente',
+            name: user.user_metadata?.name || 'Usuário',
+            phone: user.user_metadata?.phone,
+            points: 0,
+            addresses: [],
+            allowedTabs: []
+          };
+        }
+        return newProfile as AppUser;
+      }
+
+      return {
+        id: profile.id,
+        email: profile.email,
+        role: profile.role as UserRole,
+        name: profile.name,
+        phone: profile.phone,
+        points: profile.points,
+        addresses: profile.addresses || [],
+        location: profile.location,
+        allowedTabs: profile.allowedTabs || [],
+      };
+    } catch (e) {
+      console.error('Fatal error in getCurrentUser:', e);
+      return null;
+    }
   },
 
   async loginWithPhone(phone: string) {
@@ -141,11 +180,65 @@ export const authService = {
     await supabase.auth.signOut();
   },
 
+  async getProfileForUser(userId: string, userEmail?: string, userMeta?: any): Promise<AppUser> {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (profile) {
+        return {
+          id: profile.id,
+          email: profile.email,
+          role: profile.role as UserRole,
+          name: profile.name,
+          phone: profile.phone,
+          points: profile.points,
+          addresses: profile.addresses || [],
+          location: profile.location,
+          allowedTabs: profile.allowedTabs || [],
+        };
+      }
+
+      // Self-healing: profile missing, create it from metadata
+      console.log('Profile missing, self-healing...');
+      const newProfile = {
+        id: userId,
+        email: userEmail,
+        name: userMeta?.name || 'Usuário',
+        role: (userMeta?.role as UserRole) || 'cliente',
+        phone: userMeta?.phone || '',
+        points: 0,
+        addresses: [],
+        allowedTabs: []
+      };
+      await supabase.from('profiles').upsert(newProfile).catch(() => {});
+      return newProfile as AppUser;
+    } catch {
+      // Fallback: return minimal user so the app never hangs
+      return {
+        id: userId,
+        email: userEmail,
+        role: (userMeta?.role as UserRole) || 'cliente',
+        name: userMeta?.name || 'Usuário',
+        phone: userMeta?.phone,
+        points: 0,
+        addresses: [],
+        allowedTabs: []
+      };
+    }
+  },
+
   onAuthStateChange(callback: (user: AppUser | null) => void) {
     return supabase.auth.onAuthStateChange(async (event, session) => {
       if (session?.user) {
-        const user = await this.getCurrentUser();
-        callback(user);
+        // IMPORTANT: Do NOT call supabase.auth.getUser() here — it causes a deadlock.
+        // Instead, use session.user directly and fetch profile separately.
+        const su = session.user;
+        const appUser = await this.getProfileForUser(su.id, su.email, su.user_metadata);
+        callback(appUser);
       } else {
         callback(null);
       }
