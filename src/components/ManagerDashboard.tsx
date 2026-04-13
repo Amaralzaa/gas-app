@@ -88,6 +88,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators'>('orders');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos'>('Todos');
+  const [areaToDelete, setAreaToDelete] = useState<string | null>(null);
   const [assigningOrder, setAssigningOrder] = useState<Order | null>(null);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
   const [isAddingCoverage, setIsAddingCoverage] = useState(false);
@@ -105,7 +106,23 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     isOneTimePerUser: false,
     validUntil: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
   });
-  const [newArea, setNewArea] = useState({ neighborhood: '', city: 'São Paulo' });
+  const [newArea, setNewArea] = useState({ neighborhood: '', city: 'São Paulo', uf: 'SP' });
+  const [ufs, setUfs] = useState<{sigla: string, nome: string}[]>([]);
+  const [cities, setCities] = useState<{nome: string}[]>([]);
+
+  useEffect(() => {
+    fetch('https://servicodados.ibge.gov.br/api/v1/localidades/estados')
+      .then(res => res.json())
+      .then(data => setUfs(data.sort((a: any, b: any) => a.sigla.localeCompare(b.sigla))));
+  }, []);
+
+  useEffect(() => {
+    if (newArea.uf) {
+      fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${newArea.uf}/municipios`)
+        .then(res => res.json())
+        .then(data => setCities(data));
+    }
+  }, [newArea.uf]);
   const [benefitSubTab, setBenefitSubTab] = useState<'coupons' | 'referrals'>('coupons');
   const [isAddingCollaborator, setIsAddingCollaborator] = useState(false);
   const [newCollaborator, setNewCollaborator] = useState({
@@ -223,7 +240,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       center: { lat: -23.5505 + (Math.random() - 0.5) * 0.02, lng: -46.6333 + (Math.random() - 0.5) * 0.02 }
     }]);
     
-    setNewArea({ neighborhood: '', city: 'São Paulo' });
+    setNewArea({ ...newArea, neighborhood: '' });
     setIsAddingCoverage(false);
   };
 
@@ -640,9 +657,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
           {activeTab === 'coverage' && (
             <motion.div key="coverage" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="flex flex-col gap-4">
                 {/* List of areas */}
-                <div className="lg:col-span-1 space-y-4">
+                <div className="w-full">
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                     <div className="flex justify-between items-center mb-6">
                       <h3 className="font-black text-lg">Bairros Atendidos</h3>
@@ -653,11 +670,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         <Plus className="w-5 h-5" />
                       </button>
                     </div>
-                    <div className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
                       {coverageAreas.map(area => (
                         <div key={area.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 relative">
                           <button 
-                            onClick={() => onUpdateCoverage(coverageAreas.filter(a => a.id !== area.id))}
+                            onClick={() => setAreaToDelete(area.id)}
                             className="absolute top-2 right-2 bg-red-50 text-red-500 p-2 rounded-xl hover:bg-red-100 transition-colors"
                           >
                             <X className="w-4 h-4" />
@@ -671,7 +688,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 </div>
 
                 {/* Map Visualization */}
-                <div className="lg:col-span-2">
+                <div className="w-full">
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full min-h-[500px] flex flex-col">
                     <h3 className="font-black text-lg mb-6 flex items-center gap-2">
                       <MapIcon className="text-yellow-500 w-5 h-5" /> Visualização Geográfica
@@ -1259,6 +1276,31 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 <button onClick={() => setIsAddingCoverage(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6 text-slate-400" /></button>
               </div>
               <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="col-span-1">
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Estado (UF)</label>
+                    <select 
+                      className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
+                      value={newArea.uf}
+                      onChange={(e) => setNewArea(prev => ({ ...prev, uf: e.target.value, city: '' }))}
+                    >
+                      <option value="">Selecione</option>
+                      {ufs.map(u => <option key={u.sigla} value={u.sigla}>{u.sigla}</option>)}
+                    </select>
+                  </div>
+                  <div className="col-span-2">
+                    <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Cidade</label>
+                    <select 
+                      className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all disabled:opacity-50"
+                      value={newArea.city}
+                      onChange={(e) => setNewArea(prev => ({ ...prev, city: e.target.value }))}
+                      disabled={!newArea.uf || cities.length === 0}
+                    >
+                      <option value="">Selecione Município</option>
+                      {cities.map(c => <option key={c.nome} value={c.nome}>{c.nome}</option>)}
+                    </select>
+                  </div>
+                </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Nome do Bairro</label>
                   <input 
@@ -1268,20 +1310,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     value={newArea.neighborhood}
                     onChange={(e) => setNewArea(prev => ({ ...prev, neighborhood: e.target.value }))}
                   />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Cidade</label>
-                  <input 
-                    type="text" 
-                    placeholder="Ex: São Paulo"
-                    className="w-full p-4 bg-slate-50 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                    value={newArea.city}
-                    onChange={(e) => setNewArea(prev => ({ ...prev, city: e.target.value }))}
-                  />
+                  <p className="text-[10px] text-slate-400 mt-2 ml-1 leading-tight">
+                    * Bairros em grandes cidades não possuem um CEP único. Se desejar usar um CEP de referência, adicione-o na descrição ou gerencie os endereços individualmente (cada rua tem o seu CEP em grandes capitais).
+                  </p>
                 </div>
                 <button 
                   onClick={handleAddCoverage}
-                  className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-slate-800 transition-all"
+                  disabled={!newArea.neighborhood || !newArea.city}
+                  className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-slate-800 transition-all disabled:opacity-50"
                 >
                   SALVAR ÁREA DE COBERTURA
                 </button>
@@ -1407,6 +1443,43 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           </div>
         )}
       </AnimatePresence>
+      <AnimatePresence>
+        {areaToDelete && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 text-center">
+              <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Trash2 className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="font-black text-xl mb-2">Remover Bairro?</h3>
+              <p className="text-sm text-slate-500 mb-6">
+                Tem certeza que deseja remover o bairro <strong>{coverageAreas.find(a => a.id === areaToDelete)?.neighborhood}</strong> da sua área de cobertura? Esta ação não pode ser desfeita.
+              </p>
+              <div className="flex gap-3">
+                <button 
+                  onClick={() => setAreaToDelete(null)}
+                  className="flex-1 px-4 py-3 bg-slate-100 text-slate-700 font-black rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  CANCELAR
+                </button>
+                <button 
+                  onClick={() => {
+                    const area = coverageAreas.find(a => a.id === areaToDelete);
+                    if (area) {
+                      onUpdateCoverage(coverageAreas.filter(a => a.id !== areaToDelete));
+                      // SweetAlert or standard alert can be optional here, but we already asked
+                    }
+                    setAreaToDelete(null);
+                  }}
+                  className="flex-1 px-4 py-3 bg-red-500 text-white font-black rounded-xl hover:bg-red-600 transition-colors"
+                >
+                  REMOVER
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {isAddingCollaborator && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
