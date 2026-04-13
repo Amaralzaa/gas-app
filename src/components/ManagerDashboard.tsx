@@ -583,7 +583,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   <MapIcon className="text-yellow-500 w-5 h-5" /> Monitoramento em Tempo Real
                 </h3>
                 
-                <div className="relative h-[500px] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200">
+                <div className="relative h-[500px] bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 z-0">
                   <MapContainer center={[-23.5505, -46.6333]} zoom={13} style={{ height: '100%', width: '100%' }}>
                     <TileLayer
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -676,7 +676,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     <h3 className="font-black text-lg mb-6 flex items-center gap-2">
                       <MapIcon className="text-yellow-500 w-5 h-5" /> Visualização Geográfica
                     </h3>
-                    <div className="flex-1 relative bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 min-h-[400px]">
+                    <div className="flex-1 relative bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 min-h-[400px] z-0">
                       <MapContainer center={[-23.5505, -46.6333]} zoom={12} style={{ height: '100%', width: '100%' }}>
                         <TileLayer
                           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -1083,7 +1083,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       {/* New Order Modal */}
       <AnimatePresence>
         {isAddingOrder && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                 <h3 className="font-black text-xl">Novo Pedido (Manual)</h3>
@@ -1171,7 +1171,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {isAddingCoupon && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-xl">Novo Cupom</h3>
@@ -1252,7 +1252,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {isAddingCoverage && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-xl">Adicionar Bairro</h3>
@@ -1292,7 +1292,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {assigningOrder && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-xl">Atribuir Pedido</h3>
@@ -1315,7 +1315,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {viewingCustomerHistory && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[80] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[80vh]">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                 <div>
@@ -1377,7 +1377,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
       <AnimatePresence>
         {isCouponModalOpen && selectedPrediction && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[90] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-xl">Enviar Cupom</h3>
@@ -1409,7 +1409,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {isAddingCollaborator && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[70] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
               <div className="p-6 border-b border-slate-100 flex justify-between items-center">
                 <h3 className="font-black text-xl">Novo Colaborador</h3>
