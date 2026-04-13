@@ -1,2 +1,14 @@
 @import "tailwindcss";
 @import "leaflet/dist/leaflet.css";
+
+/* Protect Leaflet map tiles from Tailwind's aggressive CSS reset */
+.leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.leaflet-tile-pane img,
+.leaflet-marker-icon,
+.leaflet-marker-shadow {
+  max-width: none !important;
+}
