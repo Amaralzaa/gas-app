@@ -425,13 +425,13 @@ export default function App() {
                 allCollaborators={allUsers.filter(u => u.role === 'gestor' || u.role === 'admin' || u.role === 'entregador')}
                 expenses={expenses}
                 coverageAreas={coverageAreas}
-                onUpdateCoverage={() => {}}
+                onUpdateCoverage={setCoverageAreas}
                 coupons={coupons}
-                onUpdateCoupons={() => {}}
+                onUpdateCoupons={setCoupons}
                 rewards={rewards}
-                onUpdateRewards={() => {}}
+                onUpdateRewards={setRewards}
                 referrals={referrals}
-                onUpdateReferrals={() => {}}
+                onUpdateReferrals={setReferrals}
                 onUpdateUser={handleUpdateUser}
               />
             </motion.div>
