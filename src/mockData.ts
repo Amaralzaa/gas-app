@@ -2,7 +2,7 @@ import { AppUser, Order, Expense, CoverageArea, Coupon, Reward, Referral, Benefi
 
 export const MOCK_USERS: AppUser[] = [
   {
-    id: 'user-gestor-1',
+    id: 'af35500c-e4b1-4834-a9c4-0a16d936b45d',
     name: 'Rafael Amaral (Gestor)',
     email: 'rafael.rr.amaral@gmail.com',
     role: 'gestor',
@@ -34,22 +34,36 @@ export const MOCK_USERS: AppUser[] = [
     allowedTabs: []
   },
   {
-    id: 'user-cliente-1',
-    name: 'Rafael Amaral (Cliente)',
+    id: '35234514-ff9d-4dfa-ab32-5992f3fdb61d',
+    name: 'Rafael Amaral',
     email: 'guest_21999546006@gasexpress.app',
     role: 'cliente',
     phone: '21999546006',
-    points: 120,
+    points: 14970,
     addresses: [
       {
-        cep: '24220-000',
-        street: 'Rua Coronel Moreira César',
-        number: '250',
-        complement: 'Apto 402',
-        reference: 'Próximo à padaria',
-        neighborhood: 'Icaraí',
+        cep: '24210560',
+        lat: -22.9010729,
+        lng: -43.1179227,
         city: 'Niterói',
-        state: 'RJ'
+        state: 'RJ',
+        number: '110',
+        street: 'Rua Professora Aurelia Pimentel Quaresma de Moura',
+        reference: '',
+        complement: '',
+        neighborhood: 'Ingá'
+      },
+      {
+        cep: '24220331',
+        lat: -22.9037943,
+        lng: -43.1017475,
+        city: 'Niterói',
+        state: 'RJ',
+        number: '350',
+        street: 'Rua Presidente João Pessoa',
+        reference: '',
+        complement: '',
+        neighborhood: 'Icaraí'
       }
     ],
     allowedTabs: []

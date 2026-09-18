@@ -53,6 +53,7 @@ interface CustomerDashboardProps {
   allDeliveryPersons?: AppUser[];
   onUpdateOrder?: (order: Order) => void;
   benefitsConfig?: BenefitsConfig;
+  onLogout?: () => void;
 }
 
 // HistoryCard — card expansível de histórico de pedidos
@@ -229,7 +230,7 @@ const HistoryCard: React.FC<{
 };
 
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ 
-  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig
+  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout
 }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>(initialTab || 'home');
   const [step, setStep] = useState<'landing' | 'onboarding' | 'address' | 'catalog' | 'checkout' | 'confirmation' | 'processing' | 'status'>('landing');
@@ -307,6 +308,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       onUpdateUser({ ...user, referralCode: userReferralCode });
     }
   }, [user.referralCode, userReferralCode]);
+
+  useEffect(() => {
+    if (!selectedAddress && user.addresses && user.addresses.length > 0) {
+      setSelectedAddress(user.addresses[0]);
+    }
+  }, [user.addresses, selectedAddress]);
 
   // Rastreamento automático de link de indicação (?ref=CODIGO) para novo cliente
   useEffect(() => {
@@ -449,7 +456,8 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   // Initial check for name
   useEffect(() => {
     const isDefaultName = !user.name || user.name === 'Cliente' || user.name === 'Usuário' || user.name.trim() === '';
-    const hasHistory = orders.some(o => o.customerId === user.id) || (user.addresses && user.addresses.length > 0);
+    const cleanPhone = (user.phone || '').replace(/\D/g, '');
+    const hasHistory = orders.some(o => o.customerId === user.id || (cleanPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanPhone)) || (user.addresses && user.addresses.length > 0);
     
     if (isDefaultName && !hasHistory) {
       setStep('onboarding');
@@ -600,7 +608,13 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
   };
 
-  const customerOrders = orders.filter(o => o.customerId === user.id);
+  const cleanUserPhone = (user.phone || '').replace(/\D/g, '');
+  const isUserOrder = (o: Order) => (
+    o.customerId === user.id || 
+    (cleanUserPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanUserPhone)
+  );
+
+  const customerOrders = orders.filter(isUserOrder);
 
   const cartSubtotal = Object.entries(cart).reduce((acc, [id, qty]) => {
     const product = PRODUCTS.find(p => p.id === id);
@@ -1852,11 +1866,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
           <motion.div key="tracking" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-6 max-w-2xl mx-auto space-y-6">
             {(() => {
               const activeOrders = [...orders]
-                .filter(o => o.customerId === user.id && o.status !== 'Concluído' && o.status !== 'Cancelado')
+                .filter(o => isUserOrder(o) && o.status !== 'Concluído' && o.status !== 'Cancelado')
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
               const unratedConcludedOrder = [...orders]
-                .filter(o => o.customerId === user.id && o.status === 'Concluído' && !o.rating && localRating?.orderId !== o.id)
+                .filter(o => isUserOrder(o) && o.status === 'Concluído' && !o.rating && localRating?.orderId !== o.id)
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
 
               // Se não há pedidos ativos nem pedidos para avaliar
@@ -2207,6 +2221,19 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     </div>
                   )}
                 </div>
+
+                {onLogout && (
+                  <div className="pt-2">
+                    <button 
+                      type="button"
+                      onClick={onLogout}
+                      className="w-full py-4 bg-red-50 hover:bg-red-100 text-red-600 font-black rounded-2xl border border-red-200 text-xs flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-sm cursor-pointer"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      SAIR DA MINHA CONTA
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
           </>
@@ -2893,7 +2920,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       <AnimatePresence>
         {showPointsHistoryModal && (() => {
           const completedOrdersTransactions: PointHistoryItem[] = orders
-            .filter(o => o.customerId === user.id && o.status === 'Concluído')
+            .filter(o => isUserOrder(o) && o.status === 'Concluído')
             .map(o => ({
               id: `order-${o.id}`,
               userId: user.id,
@@ -3388,7 +3415,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         <button onClick={() => setActiveTab('tracking')} className={`flex flex-col items-center gap-1 ${activeTab === 'tracking' ? 'text-yellow-500' : 'text-slate-400'}`}>
           <Navigation className="w-6 h-6" />
           <span className="text-[10px] font-bold">Rastrear</span>
-          {orders.some(o => o.customerId === user.id && o.status === 'Em Rota') && (
+          {orders.some(o => isUserOrder(o) && o.status === 'Em Rota') && (
             <span className="absolute top-2 right-1/2 translate-x-6 w-2 h-2 bg-red-500 rounded-full border-2 border-white"></span>
           )}
         </button>

@@ -247,11 +247,17 @@ const Header = ({ user, onLogout }: { user: AppUser, onLogout: () => void }) => 
         <p className="text-xs font-bold leading-none">{user.name}</p>
       </div>
       <button 
-        onClick={onLogout}
-        className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white transition-colors"
-        title="Sair"
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onLogout();
+        }}
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-red-600 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold border border-slate-700 active:scale-95 shadow-sm cursor-pointer"
+        title="Sair da Conta"
       >
-        <LogOut className="w-5 h-5" />
+        <LogOut className="w-3.5 h-3.5 text-red-400" />
+        <span>Sair</span>
       </button>
     </div>
   </header>
@@ -340,12 +346,12 @@ export default function App() {
   useEffect(() => {
     let cancelled = false;
 
-    // Check for existing session with strict 500ms timeout
+    // Check for existing session with reasonable 2500ms timeout
     const initSession = async () => {
       try {
         const sessionPromise = supabase.auth.getSession();
         const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
-          setTimeout(() => resolve({ data: { session: null } }), 500)
+          setTimeout(() => resolve({ data: { session: null } }), 2500)
         );
         const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
         if (session?.user && !cancelled) {
@@ -412,21 +418,28 @@ export default function App() {
     };
   }, []);
 
-  // Fetch initial data when user is logged in
+  // Fetch initial data when user is logged in and maintain live polling
   useEffect(() => {
     if (currentUser) {
       loadData();
       
+      // Polling contínuo a cada 4 segundos para sincronizar pedidos novos em tempo real entre todos os dispositivos
+      const pollInterval = setInterval(() => {
+        loadData();
+      }, 4000);
+
       try {
         const orderSub = orderService.subscribeToOrders(() => {
           loadData();
         });
 
         return () => {
+          clearInterval(pollInterval);
           if (orderSub && orderSub.unsubscribe) orderSub.unsubscribe();
         };
       } catch (subErr) {
         console.warn('Realtime subscription offline:', subErr);
+        return () => clearInterval(pollInterval);
       }
     }
   }, [currentUser]);
@@ -468,21 +481,42 @@ export default function App() {
 
       setAllUsers(fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS);
       setReferrals(fetchedReferrals && fetchedReferrals.length > 0 ? fetchedReferrals : MOCK_REFERRALS);
-      setCoverageAreas(fetchedCoverage && fetchedCoverage.length > 0 ? fetchedCoverage : MOCK_COVERAGE_AREAS);
-      setCoupons(MOCK_COUPONS);
-      setRewards(MOCK_REWARDS);
+      if (fetchedCoverage && fetchedCoverage.length > 0) {
+        setCoverageAreas(fetchedCoverage);
+      }
     } catch (err) {
       console.warn('Usando dados sincronizados locais:', err);
     }
   };
 
   const handleLogout = async () => {
+    // 1. Desconecta o estado React imediatamente para voltar à tela de login sem travar
+    setCurrentUser(null);
+
+    // 2. Limpa todos os tokens de autenticação do localStorage e sessionStorage
     try {
-      await authService.signOut();
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && (key.startsWith('sb-') || key.includes('auth') || key.includes('supabase') || key === 'gas_delivery_user')) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(k => localStorage.removeItem(k));
+      sessionStorage.clear();
+    } catch (err) {
+      console.warn('Erro ao limpar storage de auth:', err);
+    }
+
+    // 3. Chama o signOut do Supabase em segundo plano com timeout para não prender
+    try {
+      await Promise.race([
+        authService.signOut(),
+        new Promise(res => setTimeout(res, 500))
+      ]);
     } catch (e) {
       console.warn('Logout fallback:', e);
     }
-    setCurrentUser(null);
   };
 
   const handleOrderCreated = async (newOrder: Order) => {
@@ -733,6 +767,7 @@ export default function App() {
                 allUsers={allUsers}
                 allDeliveryPersons={allUsers.filter(u => u.role === 'entregador')}
                 benefitsConfig={benefitsConfig}
+                onLogout={handleLogout}
               />
             </motion.div>
           )}
@@ -762,6 +797,8 @@ export default function App() {
                 onUpdateUser={handleUpdateUser}
                 benefitsConfig={benefitsConfig}
                 onUpdateBenefitsConfig={handleUpdateBenefitsConfig}
+                onLogout={handleLogout}
+                onRefreshData={loadData}
               />
             </motion.div>
           )}

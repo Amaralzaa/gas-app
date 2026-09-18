@@ -32,7 +32,9 @@ import {
   Send,
   Clock,
   History,
-  AlertCircle
+  AlertCircle,
+  LogOut,
+  RotateCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON } from 'react-leaflet';
@@ -71,6 +73,8 @@ interface ManagerDashboardProps {
   onUpdateUser: (user: AppUser) => void;
   benefitsConfig: BenefitsConfig;
   onUpdateBenefitsConfig: (config: BenefitsConfig) => void;
+  onLogout?: () => void;
+  onRefreshData?: () => void;
 }
 
 export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ 
@@ -92,7 +96,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   onUpdateReferrals,
   onUpdateUser,
   benefitsConfig,
-  onUpdateBenefitsConfig
+  onUpdateBenefitsConfig,
+  onLogout,
+  onRefreshData
 }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators'>('tracking');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos'>('Todos');
@@ -667,16 +673,26 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
         </nav>
 
-        <div className="p-4 border-t border-slate-800">
+        <div className="p-4 border-t border-slate-800 space-y-2">
           <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-2xl">
             <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center">
               <User className="text-slate-400 w-5 h-5" />
             </div>
-            <div className="overflow-hidden">
+            <div className="overflow-hidden flex-1">
               <p className="text-xs font-bold truncate">{user.name}</p>
               <p className="text-[10px] text-slate-500 truncate uppercase tracking-tight">{user.role}</p>
             </div>
           </div>
+          {onLogout && (
+            <button
+              type="button"
+              onClick={onLogout}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-red-600/90 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-all border border-slate-700/60 cursor-pointer shadow-sm"
+              title="Sair do Painel"
+            >
+              <LogOut className="w-3.5 h-3.5 text-red-400" /> Sair do Painel
+            </button>
+          )}
         </div>
       </aside>
 
@@ -692,6 +708,16 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             {(user.role === 'gestor' || user.allowedTabs?.includes('map')) && <button onClick={() => setActiveTab('map')} className={`p-2 rounded-lg ${activeTab === 'map' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapIcon className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('coverage')) && <button onClick={() => setActiveTab('coverage')} className={`p-2 rounded-lg ${activeTab === 'coverage' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapPin className="w-5 h-5" /></button>}
             {user.role === 'gestor' && <button onClick={() => setActiveTab('collaborators')} className={`p-2 rounded-lg ${activeTab === 'collaborators' ? 'bg-yellow-400' : 'bg-slate-100'}`}><Users className="w-5 h-5" /></button>}
+            {onLogout && (
+              <button 
+                type="button" 
+                onClick={onLogout} 
+                className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200" 
+                title="Sair da Conta"
+              >
+                <LogOut className="w-5 h-5" />
+              </button>
+            )}
           </div>
         </header>
 
@@ -794,6 +820,17 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       </button>
                     )}
                   </div>
+                  {onRefreshData && (
+                    <button
+                      type="button"
+                      onClick={onRefreshData}
+                      className="flex items-center justify-center gap-1.5 px-4 py-2.5 bg-yellow-400 hover:bg-yellow-500 text-slate-900 font-black rounded-2xl text-xs transition-all shadow-sm active:scale-95 shrink-0 cursor-pointer"
+                      title="Atualizar lista de pedidos agora"
+                    >
+                      <RotateCw className="w-3.5 h-3.5" />
+                      <span>Atualizar</span>
+                    </button>
+                  )}
                   {orderSearchQuery && (
                     <div className="flex items-center justify-between sm:justify-start gap-2 shrink-0">
                       <span className="text-xs font-bold text-slate-600 bg-slate-100 px-3 py-2 rounded-xl">
