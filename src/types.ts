@@ -1,13 +1,16 @@
-export type OrderStatus = 'Pendente' | 'Em Rota' | 'Concluído' | 'Cancelado';
+export type OrderStatus = 'Pendente' | 'Atribuído' | 'Em Rota' | 'Concluído' | 'Cancelado';
 
 export interface Address {
   cep: string;
   street: string;
   number: string;
   complement?: string;
+  reference?: string;
   neighborhood: string;
   city: string;
   state: string;
+  lat?: number;
+  lng?: number;
 }
 
 export interface Product {
@@ -41,6 +44,21 @@ export interface Order {
   createdAt: string;
   estimatedArrival?: string; // ISO string
   deliveryPersonLocation?: { lat: number; lng: number };
+  selectedFreebie?: string; // Nome do brinde selecionado
+  rating?: number; // 1 to 5 stars
+  serviceRating?: number; // Avaliação da Porto Gás (1-5)
+  deliveryRating?: number; // Avaliação do entregador (1-5)
+  feedback?: string;
+  cancellationReason?: string;
+  cancelledAt?: string;
+}
+
+export interface Freebie {
+  id: string;
+  name: string;
+  image: string;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface Coupon {
@@ -65,6 +83,17 @@ export interface Reward {
   pointsCost: number;
   type: 'discount' | 'free_product' | 'voucher';
   value?: number;
+  validityDays?: number;
+  minOrderValue?: number;
+  rules?: string[];
+  isActive?: boolean;
+}
+
+export interface BenefitsConfig {
+  referralDiscountValue: number; // R$ de desconto para o amigo indicado (1º pedido)
+  referralPointsAwarded: number; // Pontos ganhos por indicação concluída
+  pointsPerCurrency: number; // Pontos ganhos por R$ 1,00 gasto em compras concluídas
+  referralMinOrderValue?: number; // Valor mínimo do pedido para aplicar cupom de indicação
 }
 
 export interface Expense {
@@ -82,11 +111,22 @@ export interface CoverageArea {
   city: string;
   allowedCeps: string[]; // List of CEP prefixes or specific CEPs
   center?: { lat: number; lng: number };
+  boundary?: any; // GeoJSON geometry
 }
 
 export type AppView = 'Cliente' | 'Gestor' | 'Entregador';
 
 export type UserRole = 'cliente' | 'gestor' | 'entregador' | 'admin';
+
+export interface PointHistoryItem {
+  id: string;
+  userId: string;
+  type: 'earned_order' | 'referral_bonus' | 'redeemed_reward' | 'adjustment';
+  points: number;
+  description: string;
+  orderId?: string;
+  createdAt: string;
+}
 
 export interface AppUser {
   id: string;
@@ -101,9 +141,10 @@ export interface AppUser {
   location?: { lat: number; lng: number }; // For delivery persons
   lastMessageSentAt?: string; // ISO string
   allowedTabs?: string[]; // For granular access control (e.g. ['orders', 'map'])
+  pointHistory?: PointHistoryItem[];
 }
 
-export type ReferralStatus = 'Pendente' | 'Validado' | 'Rejeitado';
+export type ReferralStatus = 'Pendente' | 'Validado' | 'Confirmado' | 'Rejeitado';
 
 export interface Referral {
   id: string;

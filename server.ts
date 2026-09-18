@@ -25,10 +25,17 @@ async function startServer() {
     }
   });
 
+  // Screenshots e Galeria Route
+  const brainDir = path.resolve('C:/Users/rafae/.gemini/antigravity/brain/48e2ed43-cdc3-434a-bc4a-cbc19e870b1a');
+  app.use('/screenshots', express.static(path.join(brainDir, 'screenshots')));
+  app.get('/galeria', (req, res) => {
+    res.sendFile(path.join(brainDir, 'galeria_telas.html'));
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: "spa",
     });
     app.use(vite.middlewares);

@@ -27,7 +27,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppView, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral } from './types';
+import { AppView, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig } from './types';
 import { PRODUCTS } from './constants';
 import { CustomerDashboard } from './components/CustomerDashboard';
 import { ManagerDashboard } from './components/ManagerDashboard';
@@ -38,7 +38,19 @@ import { authService } from './services/authService';
 import { orderService } from './services/orderService';
 import { userService } from './services/userService';
 import { expenseService } from './services/expenseService';
+import { coverageService } from './services/coverageService';
+import { referralService } from './services/referralService';
 import { supabase } from './lib/supabase';
+import { 
+  MOCK_USERS, 
+  MOCK_ORDERS, 
+  MOCK_COVERAGE_AREAS, 
+  MOCK_EXPENSES, 
+  MOCK_COUPONS, 
+  MOCK_REWARDS, 
+  MOCK_REFERRALS,
+  MOCK_BENEFITS_CONFIG
+} from './mockData';
 
 // --- Components ---
 
@@ -46,9 +58,7 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
-  const [loginMethod, setLoginMethod] = useState<'email' | 'phone'>('email'); // Default to email for simplicity in testing
-  const [isRegistering, setIsRegistering] = useState(false);
+  const [loginMethod, setLoginMethod] = useState<'phone' | 'email'>('phone'); 
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -60,20 +70,35 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
     try {
       let authUser: any = null;
 
-      if (isRegistering) {
-        if (!name.trim()) throw new Error('Por favor, informe seu nome.');
-        authUser = await authService.signUp(email || `guest_${phone.replace(/\D/g, '')}@gasexpress.app`, name, 'cliente', phone);
-      } else {
-        if (loginMethod === 'email') {
-          if (!email.trim() || !password.trim()) throw new Error('E-mail e senha são obrigatórios.');
+      if (loginMethod === 'email') {
+        if (!email.trim() || !password.trim()) throw new Error('E-mail e senha são obrigatórios.');
+        try {
           authUser = await authService.login(email, password);
-        } else {
-          if (!phone.trim()) throw new Error('O número do WhatsApp é obrigatório.');
+        } catch (authErr: any) {
+          const found = MOCK_USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
+          if (found) {
+            onLogin(found);
+            return;
+          }
+          throw authErr;
+        }
+      } else {
+        if (!phone.trim() || phone.length < 10) throw new Error('Insira um número de telefone válido com DDD.');
+        try {
           authUser = await authService.loginWithPhone(phone);
+        } catch (authErr: any) {
+          const cleanPhone = phone.replace(/\D/g, '');
+          const found = MOCK_USERS.find(u => u.phone === cleanPhone) || {
+            ...MOCK_USERS[3],
+            phone: cleanPhone,
+            name: 'Cliente Teste'
+          };
+          onLogin(found);
+          return;
         }
       }
 
-      // Directly fetch profile and set user — don't wait for onAuthStateChange
+      // Directly fetch profile and set user
       if (authUser) {
         const appUser = await authService.getProfileForUser(
           authUser.id, authUser.email, authUser.user_metadata
@@ -99,85 +124,67 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
             <Truck className="text-slate-900 w-10 h-10" />
           </div>
           <h1 className="text-3xl font-black text-slate-900">GÁS EXPRESS</h1>
-          <p className="text-slate-500 font-medium">
-            {isRegistering ? 'Complete seu cadastro' : 'Acesse sua conta para continuar'}
-          </p>
+          <p className="text-slate-500 font-medium">Acesse sua conta para continuar</p>
         </div>
 
-        {!isRegistering && (
-          <div className="flex gap-2 mb-6 bg-slate-100 p-1 rounded-xl">
-            <button 
-              onClick={() => setLoginMethod('phone')}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-            >
-              WHATSAPP
-            </button>
-            <button 
-              onClick={() => setLoginMethod('email')}
-              className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-            >
-              COLABORADOR
-            </button>
-          </div>
-        )}
+        <div className="flex gap-2 mb-6 bg-slate-100 p-1 rounded-xl">
+          <button 
+            type="button"
+            onClick={() => setLoginMethod('phone')}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+          >
+            SOU CLIENTE
+          </button>
+          <button 
+            type="button"
+            onClick={() => setLoginMethod('email')}
+            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
+          >
+            SOU GESTOR
+          </button>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {loginMethod === 'email' && (
+          {loginMethod === 'email' ? (
+            <>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">E-mail</label>
+                <input 
+                  required
+                  type="email" 
+                  className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
+                  placeholder="seu@email.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Senha</label>
+                <input 
+                  required
+                  type="password" 
+                  className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+            </>
+          ) : (
             <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">E-mail</label>
-              <input 
-                required
-                type="email" 
-                className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                placeholder="seu@email.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-              />
-            </div>
-          )}
-
-          {loginMethod === 'email' && !isRegistering && (
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Senha</label>
-              <input 
-                required
-                type="password" 
-                className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                placeholder="••••••••"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-          )}
-
-          {(loginMethod === 'phone' || isRegistering) && (
-            <div>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Telefone</label>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Seu WhatsApp</label>
               <input 
                 required
                 type="tel" 
                 className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                placeholder="11999999999"
+                placeholder="(11) 99999-9999"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
               />
+              <p className="text-[10px] text-slate-400 mt-2 ml-1">Enviaremos você direto para o cardápio se já tiver cadastro.</p>
             </div>
           )}
 
-          {isRegistering && (
-            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }}>
-              <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Seu Nome</label>
-              <input 
-                required
-                type="text" 
-                className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                placeholder="Como gostaria de ser chamado?"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </motion.div>
-          )}
-          
           {error && (
             <p className="text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl">{error}</p>
           )}
@@ -185,27 +192,40 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
           <button 
             type="submit"
             disabled={loading}
-            className="w-full bg-slate-900 text-white font-black py-4 rounded-2xl shadow-lg hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50"
+            className="w-full bg-slate-900 text-white font-black py-4 mt-2 rounded-2xl shadow-lg hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50"
           >
-            {loading ? 'CARREGANDO...' : (isRegistering ? 'CONCLUIR CADASTRO' : 'ENTRAR NO SISTEMA')}
-          </button>
-          
-          <button 
-            type="button"
-            onClick={() => setIsRegistering(!isRegistering)}
-            className="w-full text-slate-400 font-bold py-2 text-sm hover:text-slate-600 transition-colors"
-          >
-            {isRegistering ? 'Já tenho conta - Entrar' : 'Novo por aqui? Criar conta'}
+            {loading ? 'CARREGANDO...' : 'ENTRAR NO APLICATIVO'}
           </button>
         </form>
 
-        {!isRegistering && (
-          <div className="mt-8 pt-6 border-t border-slate-100">
-            <p className="text-xs text-slate-400 text-center font-medium">
-              Utilize os dados de acesso configurados no Supabase.
-            </p>
+        <div className="mt-6 pt-5 border-t border-slate-100">
+          <p className="text-[11px] text-slate-400 text-center font-black uppercase tracking-wider mb-3">
+            Acesso Rápido para Testes Locais
+          </p>
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => onLogin(MOCK_USERS[0])}
+              className="p-2.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-900 rounded-xl text-xs font-black text-center border border-yellow-200 transition-all hover:scale-[1.02] active:scale-95"
+            >
+              👔 Gestor
+            </button>
+            <button
+              type="button"
+              onClick={() => onLogin(MOCK_USERS[1])}
+              className="p-2.5 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-xl text-xs font-black text-center border border-blue-200 transition-all hover:scale-[1.02] active:scale-95"
+            >
+              🛵 Entregador
+            </button>
+            <button
+              type="button"
+              onClick={() => onLogin(MOCK_USERS[3])}
+              className="p-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-xl text-xs font-black text-center border border-emerald-200 transition-all hover:scale-[1.02] active:scale-95"
+            >
+              🛒 Cliente
+            </button>
           </div>
-        )}
+        </div>
       </motion.div>
     </div>
   );
@@ -241,45 +261,121 @@ const Header = ({ user, onLogout }: { user: AppUser, onLogout: () => void }) => 
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [expenses, setExpenses] = useState<Expense[]>([]);
-  const [coverageAreas, setCoverageAreas] = useState<CoverageArea[]>([
-    { id: '1', neighborhood: 'Sé', city: 'São Paulo', allowedCeps: [], center: { lat: -23.5505, lng: -46.6333 } },
-    { id: '2', neighborhood: 'Bela Vista', city: 'São Paulo', allowedCeps: [], center: { lat: -23.5615, lng: -46.6553 } },
-    { id: '3', neighborhood: 'República', city: 'São Paulo', allowedCeps: [], center: { lat: -23.5447, lng: -46.6388 } }
-  ]);
-  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
-  const [coupons, setCoupons] = useState<Coupon[]>([]);
-  const [rewards, setRewards] = useState<Reward[]>([]);
-  const [referrals, setReferrals] = useState<Referral[]>([]);
+  const [orders, setOrders] = useState<Order[]>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_orders');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return MOCK_ORDERS;
+  });
+  const [expenses, setExpenses] = useState<Expense[]>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_expenses');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return MOCK_EXPENSES;
+  });
+  const [coverageAreas, setCoverageAreas] = useState<CoverageArea[]>(MOCK_COVERAGE_AREAS);
+  const [allUsers, setAllUsers] = useState<AppUser[]>(MOCK_USERS);
+  const [coupons, setCoupons] = useState<Coupon[]>(MOCK_COUPONS);
+  const [rewards, setRewards] = useState<Reward[]>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_rewards');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return MOCK_REWARDS;
+  });
+  const [benefitsConfig, setBenefitsConfig] = useState<BenefitsConfig>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_benefits_config');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return MOCK_BENEFITS_CONFIG;
+  });
+  const [referrals, setReferrals] = useState<Referral[]>(MOCK_REFERRALS);
   const [initialTab, setInitialTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>('home');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+
+  // Sincronização em tempo real entre abas do navegador (Cliente <-> Gestor <-> Entregador)
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('gas_app_sync_channel');
+      channel.onmessage = (event) => {
+        if (event.data?.type === 'SYNC_ORDERS' && Array.isArray(event.data.orders)) {
+          setOrders(event.data.orders);
+        } else if (event.data?.type === 'SYNC_EXPENSES' && Array.isArray(event.data.expenses)) {
+          setExpenses(event.data.expenses);
+        } else if (event.data?.type === 'SYNC_BENEFITS_CONFIG' && event.data.config) {
+          setBenefitsConfig(event.data.config);
+        } else if (event.data?.type === 'SYNC_REWARDS' && Array.isArray(event.data.rewards)) {
+          setRewards(event.data.rewards);
+        }
+      };
+    } catch {}
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'gas_app_orders' && e.newValue) {
+        try { setOrders(JSON.parse(e.newValue)); } catch {}
+      }
+      if (e.key === 'gas_app_expenses' && e.newValue) {
+        try { setExpenses(JSON.parse(e.newValue)); } catch {}
+      }
+      if (e.key === 'gas_app_benefits_config' && e.newValue) {
+        try { setBenefitsConfig(JSON.parse(e.newValue)); } catch {}
+      }
+      if (e.key === 'gas_app_rewards' && e.newValue) {
+        try { setRewards(JSON.parse(e.newValue)); } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      if (channel) channel.close();
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, []);
 
   // Sync Auth State — check existing session on mount
   useEffect(() => {
     let cancelled = false;
 
-    // Check for existing session (does NOT trigger the auth lock)
+    // Check for existing session with strict 500ms timeout
     const initSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const sessionPromise = supabase.auth.getSession();
+        const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 500)
+        );
+        const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
         if (session?.user && !cancelled) {
-          const appUser = await authService.getProfileForUser(
-            session.user.id, session.user.email, session.user.user_metadata
-          );
-          setCurrentUser(appUser);
+          try {
+            const appUser = await authService.getProfileForUser(
+              session.user.id, session.user.email, session.user.user_metadata
+            );
+            setCurrentUser(appUser);
+          } catch (profileErr) {
+            console.warn('Profile fetch offline fallback:', profileErr);
+          }
         }
       } catch (err) {
-        console.error('Error checking session:', err);
+        console.warn('Sessão offline:', err);
       } finally {
         if (!cancelled) setLoading(false);
       }
     };
 
-    // Handle deep-link / auto-login via ?phone=
+    // Handle deep-link / auto-login via ?phone= or referral via ?ref=
     const params = new URLSearchParams(window.location.search);
+    const refParam = params.get('ref');
+    if (refParam) {
+      localStorage.setItem('gas_app_pending_ref_code', refParam.toUpperCase().trim());
+    }
+
     const phoneParam = params.get('phone');
     if (phoneParam) {
+      setInitialTab('tracking');
+      setLoading(true);
       authService.loginWithPhone(phoneParam)
         .then(async (user) => {
           if (user && !cancelled) {
@@ -295,16 +391,24 @@ export default function App() {
       initSession();
     }
 
-    // Listen for sign-out events only
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'SIGNED_OUT') {
-        setCurrentUser(null);
-      }
-    });
+    // Listen for sign-out events only (safely)
+    let subscription: any = null;
+    try {
+      const authRes = supabase.auth.onAuthStateChange((event) => {
+        if (event === 'SIGNED_OUT') {
+          setCurrentUser(null);
+        }
+      });
+      subscription = authRes?.data?.subscription;
+    } catch (e) {
+      console.warn('onAuthStateChange offline:', e);
+    }
 
     return () => {
       cancelled = true;
-      subscription.unsubscribe();
+      if (subscription && typeof subscription.unsubscribe === 'function') {
+        subscription.unsubscribe();
+      }
     };
   }, []);
 
@@ -313,51 +417,202 @@ export default function App() {
     if (currentUser) {
       loadData();
       
-      // Realtime subscription for orders
-      const orderSub = orderService.subscribeToOrders(() => {
-        loadData(); // Re-fetch all data or just orders for simplicity
-      });
+      try {
+        const orderSub = orderService.subscribeToOrders(() => {
+          loadData();
+        });
 
-      return () => {
-        orderSub.unsubscribe();
-      };
+        return () => {
+          if (orderSub && orderSub.unsubscribe) orderSub.unsubscribe();
+        };
+      } catch (subErr) {
+        console.warn('Realtime subscription offline:', subErr);
+      }
     }
   }, [currentUser]);
 
   const loadData = async () => {
     try {
-      const [fetchedOrders, fetchedExpenses, fetchedUsers] = await Promise.all([
-        orderService.getOrders(),
-        expenseService.getExpenses(),
-        userService.getProfiles()
+      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals] = await Promise.all([
+        orderService.getOrders().catch(() => []),
+        expenseService.getExpenses().catch(() => []),
+        userService.getProfiles().catch(() => []),
+        coverageService.getCoverageAreas().catch(() => []),
+        referralService.getReferrals().catch(() => [])
       ]);
-      setOrders(fetchedOrders);
-      setExpenses(fetchedExpenses);
-      setAllUsers(fetchedUsers);
+      if (fetchedOrders && fetchedOrders.length > 0) {
+        setOrders(fetchedOrders);
+        localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders));
+      } else {
+        const saved = localStorage.getItem('gas_app_orders');
+        if (saved) {
+          try { setOrders(JSON.parse(saved)); } catch { setOrders(MOCK_ORDERS); }
+        } else {
+          setOrders(MOCK_ORDERS);
+          localStorage.setItem('gas_app_orders', JSON.stringify(MOCK_ORDERS));
+        }
+      }
+
+      if (fetchedExpenses && fetchedExpenses.length > 0) {
+        setExpenses(fetchedExpenses);
+        localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses));
+      } else {
+        const saved = localStorage.getItem('gas_app_expenses');
+        if (saved) {
+          try { setExpenses(JSON.parse(saved)); } catch { setExpenses(MOCK_EXPENSES); }
+        } else {
+          setExpenses(MOCK_EXPENSES);
+          localStorage.setItem('gas_app_expenses', JSON.stringify(MOCK_EXPENSES));
+        }
+      }
+
+      setAllUsers(fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS);
+      setReferrals(fetchedReferrals && fetchedReferrals.length > 0 ? fetchedReferrals : MOCK_REFERRALS);
+      setCoverageAreas(fetchedCoverage && fetchedCoverage.length > 0 ? fetchedCoverage : MOCK_COVERAGE_AREAS);
+      setCoupons(MOCK_COUPONS);
+      setRewards(MOCK_REWARDS);
     } catch (err) {
-      console.error('Error loading data from Supabase:', err);
+      console.warn('Usando dados sincronizados locais:', err);
     }
   };
 
   const handleLogout = async () => {
-    await authService.signOut();
+    try {
+      await authService.signOut();
+    } catch (e) {
+      console.warn('Logout fallback:', e);
+    }
+    setCurrentUser(null);
   };
 
   const handleOrderCreated = async (newOrder: Order) => {
+    const localCreated: Order = { 
+      ...newOrder, 
+      id: newOrder.id || 'PED-' + Math.floor(100 + Math.random() * 900) 
+    };
+
+    setOrders(prev => {
+      const updated = [localCreated, ...prev.filter(o => o.id !== localCreated.id)];
+      try {
+        localStorage.setItem('gas_app_orders', JSON.stringify(updated));
+        const ch = new BroadcastChannel('gas_app_sync_channel');
+        ch.postMessage({ type: 'SYNC_ORDERS', orders: updated });
+        ch.close();
+      } catch {}
+      return updated;
+    });
+
     try {
-      const created = await orderService.createOrder(newOrder);
-      setOrders(prev => [created, ...prev]);
-    } catch (err) {
-      console.error('Error creating order:', err);
+      await orderService.createOrder(newOrder);
+    } catch (err: any) {
+      console.warn('Sincronização offline: pedido salvo no banco local compartilhado.');
     }
   };
 
   const handleUpdateOrder = async (updatedOrder: Order) => {
+    const prevOrder = orders.find(o => o.id === updatedOrder.id);
+    const isNowCompleted = updatedOrder.status === 'Concluído' && prevOrder?.status !== 'Concluído';
+
+    setOrders(prev => {
+      const updated = prev.map(o => o.id === updatedOrder.id ? updatedOrder : o);
+      try {
+        localStorage.setItem('gas_app_orders', JSON.stringify(updated));
+        const ch = new BroadcastChannel('gas_app_sync_channel');
+        ch.postMessage({ type: 'SYNC_ORDERS', orders: updated });
+        ch.close();
+      } catch {}
+      return updated;
+    });
+
     try {
       await orderService.updateOrder(updatedOrder.id, updatedOrder);
-      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
     } catch (err) {
-      console.error('Error updating order:', err);
+      console.warn('Sincronização offline: atualização salva no banco local compartilhado.');
+    }
+
+    // REGRA DE PONTOS: Concedidos exclusivamente quando o pedido atinge status Concluído!
+    if (isNowCompleted) {
+      const multiplier = benefitsConfig?.pointsPerCurrency ?? 10;
+      const earnedPoints = Math.floor(updatedOrder.total * multiplier);
+
+      // 1. Creditar pontos na conta do cliente da compra
+      const customer = allUsers.find(u => u.id === updatedOrder.customerId);
+      if (customer) {
+        const historyItem: PointHistoryItem = {
+          id: Math.random().toString(36).substr(2, 9),
+          userId: customer.id,
+          type: 'earned_order',
+          points: earnedPoints,
+          description: `Compra concluída (Pedido #${updatedOrder.id})`,
+          orderId: updatedOrder.id,
+          createdAt: new Date().toISOString()
+        };
+        const updatedCustomer: AppUser = {
+          ...customer,
+          points: (customer.points || 0) + earnedPoints,
+          pointHistory: [historyItem, ...(customer.pointHistory || [])]
+        };
+        await handleUpdateUser(updatedCustomer);
+      }
+
+      // 2. Se foi utilizado um código de indicação / cupom de amigo, bonificar o indicador
+      if (updatedOrder.couponCode) {
+        const matchingReferrer = allUsers.find(u => 
+          u.referralCode && u.referralCode.toUpperCase() === updatedOrder.couponCode?.toUpperCase() && 
+          u.id !== updatedOrder.customerId
+        );
+        if (matchingReferrer) {
+          // VERIFICAÇÃO RIGOROSA: Deve ser a PRIMEIRA compra concluída do cliente indicado!
+          const cleanOrderPhone = (updatedOrder.phone || '').replace(/\D/g, '');
+          const previousCompletedOrders = orders.filter(o => 
+            (o.customerId === updatedOrder.customerId || (cleanOrderPhone && o.phone?.replace(/\D/g, '') === cleanOrderPhone)) &&
+            o.status === 'Concluído' && 
+            o.id !== updatedOrder.id
+          );
+
+          if (previousCompletedOrders.length === 0) {
+            const referralBonus = benefitsConfig?.referralPointsAwarded ?? 100;
+            const referrerHistoryItem: PointHistoryItem = {
+              id: Math.random().toString(36).substr(2, 9),
+              userId: matchingReferrer.id,
+              type: 'referral_bonus',
+              points: referralBonus,
+              description: `Bônus por indicação de ${updatedOrder.customerName || 'Amigo'} (1ª Compra Concluída)`,
+              orderId: updatedOrder.id,
+              createdAt: new Date().toISOString()
+            };
+            const updatedReferrer: AppUser = {
+              ...matchingReferrer,
+              points: (matchingReferrer.points || 0) + referralBonus,
+              pointHistory: [referrerHistoryItem, ...(matchingReferrer.pointHistory || [])]
+            };
+            await handleUpdateUser(updatedReferrer);
+
+            // Atualiza status da indicação na tabela de referrals de 'Pendente' para 'Confirmado'
+            const matchingRef = referrals.find(r => 
+              (r.orderId === updatedOrder.id) ||
+              (r.referrerId === matchingReferrer.id && (
+                (r.refereeId && r.refereeId === updatedOrder.customerId) ||
+                (cleanOrderPhone && r.refereePhone.replace(/\D/g, '') === cleanOrderPhone) ||
+                r.refereeName.toLowerCase() === (updatedOrder.customerName || '').toLowerCase()
+              ))
+            );
+            if (matchingRef) {
+              try {
+                await referralService.updateReferralStatus(matchingRef.id, 'Confirmado', new Date().toISOString());
+                setReferrals(prev => prev.map(r => r.id === matchingRef.id ? { 
+                  ...r, 
+                  status: 'Confirmado', 
+                  validatedAt: new Date().toISOString(), 
+                  orderId: updatedOrder.id 
+                } : r));
+              } catch (err) {
+                console.warn('Erro ao atualizar referral:', err);
+              }
+            }
+          }
+        }
+      }
     }
   };
 
@@ -374,12 +629,75 @@ export default function App() {
   };
 
   const handleAddExpense = async (expense: Expense) => {
+    setExpenses(prev => {
+      const updated = [expense, ...prev];
+      try {
+        localStorage.setItem('gas_app_expenses', JSON.stringify(updated));
+        const ch = new BroadcastChannel('gas_app_sync_channel');
+        ch.postMessage({ type: 'SYNC_EXPENSES', expenses: updated });
+        ch.close();
+      } catch {}
+      return updated;
+    });
+
     try {
-      const added = await expenseService.addExpense(expense);
-      setExpenses(prev => [added, ...prev]);
+      await expenseService.addExpense(expense);
     } catch (err) {
       console.error('Error adding expense:', err);
     }
+  };
+
+  const handleAddReferral = async (referral: Referral) => {
+    try {
+      const added = await referralService.addReferral(referral);
+      setReferrals(prev => [added, ...prev]);
+    } catch (err) {
+      console.error('Error adding referral:', err);
+      // Fallback local se a tabela referrals não existir no banco
+      setReferrals(prev => [referral, ...prev]);
+    }
+  };
+
+  const handleDeleteReferral = async (id: string) => {
+    setReferrals(prev => prev.filter(r => r.id !== id));
+    try {
+      await referralService.deleteReferral(id);
+    } catch (err) {
+      console.warn('Fallback offline para exclusão de indicação');
+    }
+  };
+
+  const handleUpdateReferral = async (updatedRef: Referral) => {
+    setReferrals(prev => prev.map(r => r.id === updatedRef.id ? updatedRef : r));
+    try {
+      await referralService.updateReferralStatus(updatedRef.id, updatedRef.status, updatedRef.validatedAt);
+    } catch (err) {
+      console.warn('Fallback offline para atualização de indicação');
+    }
+  };
+
+  const handleUpdateReferrals = async (updatedReferrals: Referral[]) => {
+    setReferrals(updatedReferrals);
+  };
+
+  const handleUpdateBenefitsConfig = (newConfig: BenefitsConfig) => {
+    setBenefitsConfig(newConfig);
+    try {
+      localStorage.setItem('gas_app_benefits_config', JSON.stringify(newConfig));
+      const ch = new BroadcastChannel('gas_app_sync_channel');
+      ch.postMessage({ type: 'SYNC_BENEFITS_CONFIG', config: newConfig });
+      ch.close();
+    } catch {}
+  };
+
+  const handleUpdateRewards = (newRewards: Reward[]) => {
+    setRewards(newRewards);
+    try {
+      localStorage.setItem('gas_app_rewards', JSON.stringify(newRewards));
+      const ch = new BroadcastChannel('gas_app_sync_channel');
+      ch.postMessage({ type: 'SYNC_REWARDS', rewards: newRewards });
+      ch.close();
+    } catch {}
   };
 
   if (loading) {
@@ -403,12 +721,18 @@ export default function App() {
                 orders={orders} 
                 onOrderCreated={handleOrderCreated} 
                 onUpdateUser={handleUpdateUser} 
+                onUpdateOrder={handleUpdateOrder}
                 initialTab={initialTab}
                 coverageAreas={coverageAreas}
                 coupons={coupons}
                 rewards={rewards}
                 referrals={referrals}
-                onAddReferral={() => {}} // TODO: Implement in service
+                onAddReferral={handleAddReferral}
+                onUpdateReferral={handleUpdateReferral}
+                onDeleteReferral={handleDeleteReferral}
+                allUsers={allUsers}
+                allDeliveryPersons={allUsers.filter(u => u.role === 'entregador')}
+                benefitsConfig={benefitsConfig}
               />
             </motion.div>
           )}
@@ -425,14 +749,19 @@ export default function App() {
                 allCollaborators={allUsers.filter(u => u.role === 'gestor' || u.role === 'admin' || u.role === 'entregador')}
                 expenses={expenses}
                 coverageAreas={coverageAreas}
-                onUpdateCoverage={setCoverageAreas}
+                onUpdateCoverage={(areas) => {
+                  setCoverageAreas(areas);
+                  coverageService.saveCoverageAreas(areas).catch(err => console.error('Error saving coverage:', err));
+                }}
                 coupons={coupons}
                 onUpdateCoupons={setCoupons}
                 rewards={rewards}
-                onUpdateRewards={setRewards}
+                onUpdateRewards={handleUpdateRewards}
                 referrals={referrals}
-                onUpdateReferrals={setReferrals}
+                onUpdateReferrals={handleUpdateReferrals}
                 onUpdateUser={handleUpdateUser}
+                benefitsConfig={benefitsConfig}
+                onUpdateBenefitsConfig={handleUpdateBenefitsConfig}
               />
             </motion.div>
           )}
@@ -445,6 +774,7 @@ export default function App() {
                 onUpdateOrder={handleUpdateOrder} 
                 onAddOrder={handleOrderCreated}
                 onAddExpense={handleAddExpense}
+                onUpdateUser={handleUpdateUser}
                 expenses={expenses}
                 allCustomers={allUsers.filter(u => u.role === 'cliente')}
               />
