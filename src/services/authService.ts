@@ -80,11 +80,11 @@ export const authService = {
   },
 
   async loginWithPhone(phone: string) {
+    const cleanPhone = phone.replace(/\D/g, '');
     // Generate an internal email based on phone number for Supabase Auth
-    // Changed domain to bypass previously stuck test accounts safely after config update
-    const internalEmail = `guest_${phone.replace(/\D/g, '')}@gasexpress.app`;
+    const internalEmail = `guest_${cleanPhone}@gasexpress.app`;
     // For clients, we use a standard internal password for simulation in this phase
-    const internalPassword = `GasPhoneAuth${phone.replace(/\D/g, '')}`;
+    const internalPassword = `GasPhoneAuth${cleanPhone}`;
 
     try {
       // Try to login
@@ -93,7 +93,7 @@ export const authService = {
         password: internalPassword,
       });
 
-      if (!loginError) return data.user;
+      if (!loginError && data.user) return data.user;
 
       // If login fails (user not found), try to sign up
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
@@ -101,7 +101,7 @@ export const authService = {
         password: internalPassword,
         options: {
           data: {
-            phone,
+            phone: cleanPhone,
             role: 'cliente' as UserRole
           }
         }
@@ -115,15 +115,14 @@ export const authService = {
         const { error: profileError } = await supabase.from('profiles').update({
           name: 'Cliente',
           role: 'cliente',
-          phone,
+          phone: cleanPhone,
           points: 0,
           addresses: [],
-          allowedTabs: []
+          allowed_tabs: []
         }).eq('id', signUpData.user.id);
 
         if (profileError) {
           console.error('Info: Could not update profile automatically (RLS/Trigger)', profileError);
-          // We don't throw here to avoid blocking the login flow just because of profile metadata
         }
       }
 
@@ -199,12 +198,30 @@ export const authService = {
       localName = localStorage.getItem('gas_app_customer_name') || '';
     } catch {}
 
+    const fallbackUser: AppUser = {
+      id: userId,
+      email: userEmail || '',
+      role: (userMeta?.role as UserRole) || 'cliente',
+      name: (localName && localName.trim()) || userMeta?.name || 'Cliente',
+      phone: userMeta?.phone || '',
+      points: 0,
+      addresses: [],
+      allowedTabs: []
+    };
+
     try {
-      const { data: profile } = await supabase
+      // Usar timeout de no máximo 2500ms para nunca bloquear ou travar a UI em conexões móveis
+      const fetchPromise = supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
+
+      const timeoutPromise = new Promise<{ data: null; error: any }>((_, reject) =>
+        setTimeout(() => reject(new Error('Profile fetch timeout')), 2500)
+      );
+
+      const { data: profile } = await Promise.race([fetchPromise, timeoutPromise]);
 
       if (profile) {
         const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')
@@ -225,7 +242,7 @@ export const authService = {
           points: profile.points,
           addresses: profile.addresses || [],
           location: profile.location,
-          allowedTabs: profile.allowedTabs || [],
+          allowedTabs: (profile as any).allowed_tabs || profile.allowedTabs || [],
         };
       }
 
@@ -240,23 +257,13 @@ export const authService = {
         phone: userMeta?.phone || '',
         points: 0,
         addresses: [],
-        allowedTabs: []
+        allowed_tabs: []
       };
-      await Promise.resolve(supabase.from('profiles').upsert(newProfile)).catch(() => {});
-      return newProfile as AppUser;
-    } catch {
-      // Fallback: return minimal user so the app never hangs
-      const fallbackName = (localName && localName.trim()) || userMeta?.name || 'Cliente';
-      return {
-        id: userId,
-        email: userEmail,
-        role: (userMeta?.role as UserRole) || 'cliente',
-        name: fallbackName,
-        phone: userMeta?.phone,
-        points: 0,
-        addresses: [],
-        allowedTabs: []
-      };
+      Promise.resolve(supabase.from('profiles').upsert(newProfile)).catch(() => {});
+      return fallbackUser;
+    } catch (e) {
+      console.warn('Profile fetch (usando fallback seguro):', e);
+      return fallbackUser;
     }
   },
 

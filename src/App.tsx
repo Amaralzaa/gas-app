@@ -84,22 +84,44 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
           throw authErr;
         }
       } else {
-        if (!phone.trim() || phone.length < 10) throw new Error('Insira um número de telefone válido com DDD.');
         const cleanPhone = phone.replace(/\D/g, '');
+        if (!cleanPhone || cleanPhone.length < 10) {
+          throw new Error('Insira um número de telefone válido com DDD.');
+        }
         
         try {
-          authUser = await authService.loginWithPhone(phone);
+          authUser = await authService.loginWithPhone(cleanPhone);
         } catch (authErr: any) {
           throw new Error(authErr.message || 'Erro ao fazer login com este número. Verifique sua conexão.');
         }
       }
 
-      // Directly fetch profile and set user
+      // Transição imediata: conecta na hora e sincroniza perfil em background
       if (authUser) {
-        const appUser = await authService.getProfileForUser(
-          authUser.id, authUser.email, authUser.user_metadata
-        );
-        onLogin(appUser);
+        let localName = '';
+        try { localName = localStorage.getItem('gas_app_customer_name') || ''; } catch {}
+        const cleanPhone = phone.replace(/\D/g, '');
+
+        const immediateUser: AppUser = {
+          id: authUser.id,
+          email: authUser.email || '',
+          role: (authUser.user_metadata?.role as UserRole) || (loginMethod === 'phone' ? 'cliente' : 'gestor'),
+          name: (localName && localName.trim()) || authUser.user_metadata?.name || (loginMethod === 'phone' ? 'Cliente' : 'Usuário'),
+          phone: cleanPhone || authUser.user_metadata?.phone,
+          points: 0,
+          addresses: [],
+          allowedTabs: []
+        };
+
+        // 1. Conecta o usuário IMEDIATAMENTE para entrar no app sem travar em CARREGANDO
+        onLogin(immediateUser);
+
+        // 2. Busca perfil detalhado em paralelo e atualiza quando chegar
+        authService.getProfileForUser(authUser.id, authUser.email, authUser.user_metadata)
+          .then(fullProfile => {
+            if (fullProfile) onLogin(fullProfile);
+          })
+          .catch(() => {});
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao processar solicitação.');
