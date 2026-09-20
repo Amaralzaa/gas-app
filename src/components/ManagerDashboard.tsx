@@ -1010,7 +1010,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               {o.isScheduled && (
                                 <div className="bg-purple-100/90 border border-purple-300 text-purple-900 rounded-xl px-2.5 py-1 text-[11px] font-black flex items-center gap-1.5 mb-2 shadow-sm">
                                   <Calendar className="w-3.5 h-3.5 text-purple-700 flex-shrink-0" />
-                                  <span className="truncate">📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                                  <span className="truncate">📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod === 'noite' ? 'Noite' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
                                 </div>
                               )}
 
@@ -2664,7 +2664,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       {o.isScheduled && (
                         <div className="mt-2.5 bg-purple-500/30 border border-purple-400/50 rounded-xl px-3 py-1.5 flex items-center gap-2 text-purple-200 text-xs font-bold">
                           <Calendar className="w-4 h-4 text-purple-300 flex-shrink-0" />
-                          <span>Pedido Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                          <span>Pedido Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod === 'noite' ? 'Noite' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
                         </div>
                       )}
                     </div>

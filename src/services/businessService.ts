@@ -1,5 +1,32 @@
 import { supabase } from '../lib/supabase';
-import { BusinessInfo, DayHours } from '../types';
+import { BusinessInfo, DayHours, DeliveryPeriod } from '../types';
+
+export const DEFAULT_DELIVERY_PERIODS: DeliveryPeriod[] = [
+  {
+    id: 'manha',
+    name: 'Manhã',
+    startTime: '08:00',
+    endTime: '13:00',
+    active: true,
+    icon: 'sun'
+  },
+  {
+    id: 'tarde',
+    name: 'Tarde',
+    startTime: '13:00',
+    endTime: '19:00',
+    active: true,
+    icon: 'sunset'
+  },
+  {
+    id: 'noite',
+    name: 'Noite',
+    startTime: '19:00',
+    endTime: '22:00',
+    active: false,
+    icon: 'moon'
+  }
+];
 
 export const DEFAULT_BUSINESS_INFO: BusinessInfo = {
   id: 'default',
@@ -30,7 +57,8 @@ export const DEFAULT_BUSINESS_INFO: BusinessInfo = {
   },
   isOpenOverride: null, // null = horário automático, true = forçar aberto, false = forçar fechado
   minOrderValue: 0,
-  deliveryFee: 0
+  deliveryFee: 0,
+  deliveryPeriods: DEFAULT_DELIVERY_PERIODS
 };
 
 export const businessService = {
@@ -57,6 +85,9 @@ export const businessService = {
           isOpenOverride: data.is_open_override,
           minOrderValue: Number(data.min_order_value || 0),
           deliveryFee: Number(data.delivery_fee || 0),
+          deliveryPeriods: (data.delivery_periods && Array.isArray(data.delivery_periods) && data.delivery_periods.length > 0)
+            ? data.delivery_periods
+            : DEFAULT_DELIVERY_PERIODS,
           updatedAt: data.updated_at
         };
         try {
@@ -70,7 +101,13 @@ export const businessService = {
 
     try {
       const saved = localStorage.getItem('gas_app_business_settings');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!parsed.deliveryPeriods || !Array.isArray(parsed.deliveryPeriods) || parsed.deliveryPeriods.length === 0) {
+          parsed.deliveryPeriods = DEFAULT_DELIVERY_PERIODS;
+        }
+        return parsed;
+      }
     } catch {}
 
     return DEFAULT_BUSINESS_INFO;
@@ -87,7 +124,7 @@ export const businessService = {
 
     // 2. Persiste no Supabase
     try {
-      const payload = {
+      const payload: any = {
         id: 'default',
         name: info.name,
         trade_name: info.tradeName || '',
@@ -101,6 +138,7 @@ export const businessService = {
         is_open_override: info.isOpenOverride,
         min_order_value: info.minOrderValue || 0,
         delivery_fee: info.deliveryFee || 0,
+        delivery_periods: info.deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
         updated_at: new Date().toISOString()
       };
 
@@ -109,7 +147,7 @@ export const businessService = {
         .upsert(payload);
 
       if (error) {
-        console.warn('Aviso: Tabela business_settings ainda não existe no Supabase. Os dados foram salvos no cache local compartilhado.', error.message);
+        console.warn('Aviso: Tabela business_settings ainda não possui a coluna ou não existe no Supabase. Salvo no cache local compartilhado.', error.message);
       }
     } catch (err) {
       console.warn('Erro ao salvar business_settings no Supabase:', err);
@@ -164,7 +202,7 @@ export const businessService = {
     return { isOpen: false, reason: `Fechou às ${todayHours.close}. Pedidos agora apenas para agendamento.`, todayHours };
   },
 
-  getNextDayFormatted(): { display: string; isoDate: string } {
+  getNextDayFormatted(): { display: string; isoDate: string; weekName: string; formattedDate: string } {
     const d = new Date();
     d.setDate(d.getDate() + 1);
     const day = String(d.getDate()).padStart(2, '0');
@@ -176,7 +214,14 @@ export const businessService = {
 
     return {
       display: `Amanhã (${weekName}, ${day}/${month})`,
-      isoDate: `${year}-${month}-${day}`
+      isoDate: `${year}-${month}-${day}`,
+      weekName,
+      formattedDate: `${day}/${month}`
     };
+  },
+
+  formatScheduledDeliveryMessage(period: { name?: string; startTime: string; endTime: string }, dateInfo?: { display: string }): string {
+    const d = dateInfo || businessService.getNextDayFormatted();
+    return `Seu gás será entregue no período de ${period.startTime} às ${period.endTime} de ${d.display}`;
   }
 };

@@ -12,9 +12,17 @@ import {
   Power,
   Store,
   Calendar,
-  Sparkles
+  Sparkles,
+  Sun,
+  Sunset,
+  Moon,
+  Plus,
+  Trash2,
+  ChevronUp,
+  ChevronDown
 } from 'lucide-react';
-import { BusinessInfo, DayHours, OpeningHours } from '../types';
+import { BusinessInfo, DayHours, OpeningHours, DeliveryPeriod } from '../types';
+import { DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
 import { LogoCropperModal } from './LogoCropperModal';
 
 interface BusinessSettingsTabProps {
@@ -36,10 +44,101 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   businessInfo,
   onSave
 }) => {
-  const [form, setForm] = useState<BusinessInfo>(businessInfo);
+  const [form, setForm] = useState<BusinessInfo>(() => ({
+    ...businessInfo,
+    deliveryPeriods: (businessInfo.deliveryPeriods && businessInfo.deliveryPeriods.length > 0)
+      ? businessInfo.deliveryPeriods
+      : DEFAULT_DELIVERY_PERIODS
+  }));
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const periods = form.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+
+  const handleTogglePeriodActive = (id: string) => {
+    setForm(prev => {
+      const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+      return {
+        ...prev,
+        deliveryPeriods: current.map(p => p.id === id ? { ...p, active: !p.active } : p)
+      };
+    });
+  };
+
+  const handleUpdatePeriod = (id: string, field: keyof DeliveryPeriod, value: any) => {
+    setForm(prev => {
+      const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+      return {
+        ...prev,
+        deliveryPeriods: current.map(p => p.id === id ? { ...p, [field]: value } : p)
+      };
+    });
+  };
+
+  const handleDeletePeriod = (id: string) => {
+    setForm(prev => {
+      const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+      if (current.length <= 1) {
+        alert('É necessário manter pelo menos 1 período configurado.');
+        return prev;
+      }
+      return {
+        ...prev,
+        deliveryPeriods: current.filter(p => p.id !== id)
+      };
+    });
+  };
+
+  const handleAddPeriod = () => {
+    setForm(prev => {
+      const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+      const count = current.length;
+      const existingNames = current.map(p => p.name.toLowerCase());
+      let newName = 'Noite';
+      let startTime = '19:00';
+      let endTime = '22:00';
+      let icon = 'moon';
+
+      if (existingNames.includes('noite')) {
+        newName = `Turno ${count + 1}`;
+        startTime = '14:00';
+        endTime = '18:00';
+        icon = 'sun';
+      }
+
+      const newPeriod: DeliveryPeriod = {
+        id: `period_${Date.now()}`,
+        name: newName,
+        startTime,
+        endTime,
+        active: true,
+        icon
+      };
+
+      return {
+        ...prev,
+        deliveryPeriods: [...current, newPeriod]
+      };
+    });
+  };
+
+  const handleMovePeriod = (index: number, direction: 'up' | 'down') => {
+    setForm(prev => {
+      const current = [...(prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS)];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= current.length) return prev;
+
+      const temp = current[index];
+      current[index] = current[targetIndex];
+      current[targetIndex] = temp;
+
+      return {
+        ...prev,
+        deliveryPeriods: current
+      };
+    });
+  };
 
   const handleOpeningHoursChange = (day: keyof OpeningHours, field: keyof DayHours, value: any) => {
     setForm(prev => ({
@@ -418,6 +517,157 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
                 </div>
               );
             })}
+          </div>
+        </div>
+
+        {/* Card 6: Períodos de Entrega Agendada */}
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div>
+              <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
+                <Calendar className="w-5 h-5 text-purple-600" /> Períodos de Entrega Agendada (Clientes)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Organize os turnos de agendamento disponíveis para os clientes (ex: Manhã, Tarde, Noite). Ative, edite horários ou crie novos períodos.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleAddPeriod}
+              className="flex items-center gap-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 px-4 py-2 rounded-2xl text-xs font-black transition-all shadow-sm active:scale-95 w-fit cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Adicionar Período</span>
+            </button>
+          </div>
+
+          <div className="space-y-3">
+            {periods.map((period, idx) => {
+              const isMorning = period.icon === 'sun' || period.name.toLowerCase().includes('manh');
+              const isAfternoon = period.icon === 'sunset' || period.name.toLowerCase().includes('tarde');
+              const isNight = period.icon === 'moon' || period.name.toLowerCase().includes('noite');
+
+              return (
+                <div
+                  key={period.id}
+                  className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${
+                    period.active
+                      ? 'bg-slate-50/70 border-slate-200 hover:bg-slate-50'
+                      : 'bg-slate-100/50 border-dashed border-slate-300 opacity-60'
+                  }`}
+                >
+                  {/* Esquerda: Status Switch + Reordenação + Ícone & Nome */}
+                  <div className="flex items-center gap-3">
+                    {/* Botões Reordenar */}
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => handleMovePeriod(idx, 'up')}
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                        title="Mover para cima"
+                      >
+                        <ChevronUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === periods.length - 1}
+                        onClick={() => handleMovePeriod(idx, 'down')}
+                        className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+                        title="Mover para baixo"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    {/* Toggle Ativo */}
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePeriodActive(period.id)}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none flex-shrink-0 cursor-pointer ${
+                        period.active ? 'bg-purple-600' : 'bg-slate-300'
+                      }`}
+                      title={period.active ? 'Turno ativo (visível aos clientes)' : 'Turno inativo (desativado)'}
+                    >
+                      <span
+                        className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          period.active ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+
+                    {/* Ícone contextual */}
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 shadow-sm ${
+                      isMorning ? 'bg-amber-100 text-amber-600' :
+                      isAfternoon ? 'bg-orange-100 text-orange-600' :
+                      isNight ? 'bg-indigo-100 text-indigo-600' :
+                      'bg-purple-100 text-purple-600'
+                    }`}>
+                      {isMorning ? <Sun className="w-4 h-4" /> :
+                       isAfternoon ? <Sunset className="w-4 h-4" /> :
+                       isNight ? <Moon className="w-4 h-4" /> :
+                       <Clock className="w-4 h-4" />}
+                    </div>
+
+                    {/* Nome do turno */}
+                    <div>
+                      <input
+                        type="text"
+                        value={period.name}
+                        onChange={(e) => handleUpdatePeriod(period.id, 'name', e.target.value)}
+                        className="bg-transparent font-black text-sm text-slate-900 border-b border-transparent hover:border-slate-300 focus:border-purple-500 outline-none pb-0.5"
+                        placeholder="Nome do período"
+                      />
+                      <span className="block text-[10px] font-bold uppercase text-slate-400">
+                        {period.active ? 'Ativo no App' : 'Desativado'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Direita: Horários e Exclusão */}
+                  <div className="flex items-center gap-3 self-end sm:self-center">
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm">
+                        <span className="text-xs font-medium text-slate-400">Das</span>
+                        <input
+                          type="time"
+                          value={period.startTime}
+                          onChange={(e) => handleUpdatePeriod(period.id, 'startTime', e.target.value)}
+                          className="bg-transparent text-xs font-bold text-slate-900 outline-none"
+                        />
+                      </div>
+                      <span className="text-xs font-bold text-slate-400">às</span>
+                      <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-sm">
+                        <span className="text-xs font-medium text-slate-400">Até</span>
+                        <input
+                          type="time"
+                          value={period.endTime}
+                          onChange={(e) => handleUpdatePeriod(period.id, 'endTime', e.target.value)}
+                          className="bg-transparent text-xs font-bold text-slate-900 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePeriod(period.id)}
+                      className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer"
+                      title="Excluir período"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="bg-purple-50/60 border border-purple-200/60 p-3.5 rounded-2xl flex items-center gap-2.5 text-xs text-purple-900">
+            <Sparkles className="w-4 h-4 text-purple-600 flex-shrink-0" />
+            <p>
+              Os períodos ativos acima serão exibidos diretamente para os clientes escolherem ao selecionar a modalidade <strong>Agendar pedido</strong>.
+            </p>
           </div>
         </div>
 

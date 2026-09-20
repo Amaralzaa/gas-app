@@ -53,7 +53,8 @@ export interface Order {
   cancelledAt?: string;
   isScheduled?: boolean;
   scheduledDate?: string;
-  scheduledPeriod?: 'manha' | 'tarde';
+  scheduledPeriod?: string;
+  scheduledPeriodName?: string;
   scheduledTimeRange?: string;
 }
 
@@ -180,6 +181,15 @@ export interface OpeningHours {
   sunday: DayHours;
 }
 
+export interface DeliveryPeriod {
+  id: string; // e.g. 'manha', 'tarde', 'noite' ou uuid
+  name: string; // e.g. 'Manhã', 'Tarde', 'Noite'
+  startTime: string; // e.g. '08:00'
+  endTime: string; // e.g. '13:00'
+  active: boolean;
+  icon?: string; // 'sun' | 'sunset' | 'moon' | 'clock' | string
+}
+
 export interface BusinessInfo {
   id: string;
   name: string;
@@ -202,5 +212,6 @@ export interface BusinessInfo {
   isOpenOverride?: boolean | null; // null = automático por horário, true = forçar aberto, false = forçar fechado
   minOrderValue?: number;
   deliveryFee?: number;
+  deliveryPeriods?: DeliveryPeriod[];
   updatedAt?: string;
 }

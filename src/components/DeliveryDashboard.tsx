@@ -280,7 +280,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ user, orde
                     {o.isScheduled && (
                       <div className="bg-purple-950/80 border border-purple-500/50 text-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold mb-3 flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-purple-400" />
-                        <span>📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                        <span>📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod === 'noite' ? 'Noite' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
                       </div>
                     )}
 

@@ -50,7 +50,9 @@ export const orderService = {
       delete fallbackPayload.scheduled_period;
       delete fallbackPayload.scheduled_time_range;
 
-      const schedNote = `[Agendado para: ${order.scheduledDate || 'Amanhã'} - ${order.scheduledPeriod === 'manha' ? 'Manhã (08h às 13h)' : 'Tarde (13h às 19h)'}]`;
+      const periodLabel = order.scheduledPeriodName || (order.scheduledPeriod === 'manha' ? 'Manhã' : order.scheduledPeriod === 'tarde' ? 'Tarde' : order.scheduledPeriod || 'Agendado');
+      const rangeLabel = order.scheduledTimeRange ? ` (${order.scheduledTimeRange})` : '';
+      const schedNote = `[Agendado para: ${order.scheduledDate || 'Amanhã'} - ${periodLabel}${rangeLabel}]`;
       fallbackPayload.feedback = fallbackPayload.feedback ? `${fallbackPayload.feedback} | ${schedNote}` : schedNote;
 
       const retryRes = await supabase
@@ -143,6 +145,9 @@ export const orderService = {
       } else if (dbOrder.feedback.includes('Tarde')) {
         schedPeriod = 'tarde';
         schedRange = '13:00 às 19:00';
+      } else if (dbOrder.feedback.includes('Noite')) {
+        schedPeriod = 'noite';
+        schedRange = '19:00 às 22:00';
       }
     }
 

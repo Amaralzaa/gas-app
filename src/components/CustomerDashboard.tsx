@@ -29,14 +29,15 @@ import {
   Calendar,
   Zap,
   Sun,
-  Sunset
+  Sunset,
+  Moon
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo } from '../types';
+import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod } from '../types';
 import { PRODUCTS } from '../constants';
-import { businessService } from '../services/businessService';
+import { businessService, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
 
 const houseIcon = L.divIcon({ html: '<div style="font-size:28px">🏠</div>', className: '', iconAnchor: [14,28] });
 const motoIcon  = L.divIcon({ html: '<div style="font-size:28px">🛵</div>', className: '', iconAnchor: [14,28] });
@@ -62,6 +63,93 @@ interface CustomerDashboardProps {
   businessInfo?: BusinessInfo;
 }
 
+// ScheduledPeriodSelector — Seletor dinâmico de turnos de agendamento com mensagem contextual
+const ScheduledPeriodSelector: React.FC<{
+  periods: DeliveryPeriod[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  dateInfo: { display: string };
+}> = ({ periods, selectedId, onSelect, dateInfo }) => {
+  const selected = periods.find(p => p.id === selectedId) || periods[0];
+
+  return (
+    <div className="bg-purple-50/70 border border-purple-200 p-3.5 rounded-2xl space-y-3 shadow-xs">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-black text-purple-950 flex items-center gap-1.5">
+          <Calendar className="w-3.5 h-3.5 text-purple-600" />
+          Agendamento para {dateInfo.display}
+        </span>
+        <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
+          {periods.length} {periods.length === 1 ? 'turno disponível' : 'turnos disponíveis'}
+        </span>
+      </div>
+
+      {/* Lista de Períodos com a bolinha à esquerda */}
+      <div className="space-y-2">
+        {periods.map(period => {
+          const isSelected = selected?.id === period.id;
+          const isMorning = period.icon === 'sun' || period.name.toLowerCase().includes('manh');
+          const isAfternoon = period.icon === 'sunset' || period.name.toLowerCase().includes('tarde');
+          const isNight = period.icon === 'moon' || period.name.toLowerCase().includes('noite');
+
+          return (
+            <div
+              key={period.id}
+              onClick={() => onSelect(period.id)}
+              className={`flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all ${
+                isSelected
+                  ? 'bg-white border-purple-500 ring-2 ring-purple-400 shadow-sm'
+                  : 'bg-white/80 border-slate-200 hover:bg-white hover:border-slate-300'
+              }`}
+            >
+              {/* Bolinha de rádio à esquerda */}
+              <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
+                isSelected ? 'border-purple-600 bg-purple-600' : 'border-slate-300 bg-white'
+              }`}>
+                {isSelected && <div className="w-2 h-2 bg-white rounded-full" />}
+              </div>
+
+              {/* Ícone e dados do período */}
+              <div className="flex-1 min-w-0">
+                <p className="font-black text-xs text-slate-900 flex items-center gap-1.5">
+                  {isMorning && <Sun className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />}
+                  {isAfternoon && <Sunset className="w-3.5 h-3.5 text-orange-500 flex-shrink-0" />}
+                  {isNight && <Moon className="w-3.5 h-3.5 text-indigo-500 flex-shrink-0" />}
+                  {!isMorning && !isAfternoon && !isNight && <Clock className="w-3.5 h-3.5 text-purple-600 flex-shrink-0" />}
+                  <span className="truncate">{period.name}</span>
+                </p>
+                <p className="text-[11px] text-slate-500 font-medium">
+                  {period.startTime} às {period.endTime}
+                </p>
+              </div>
+
+              {isSelected && (
+                <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full flex-shrink-0">
+                  Selecionado
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Frase solicitada pelo usuário em destaque */}
+      {selected && (
+        <div className="bg-white/90 border border-purple-200 p-3 rounded-xl flex items-start gap-2.5 text-purple-950 shadow-xs">
+          <Truck className="w-4 h-4 text-purple-700 mt-0.5 flex-shrink-0" />
+          <p className="text-xs font-bold leading-relaxed">
+            Seu gás será entregue no período de{' '}
+            <span className="font-black text-purple-800 underline decoration-purple-400 decoration-2">
+              {selected.startTime} às {selected.endTime}
+            </span>{' '}
+            de {dateInfo.display}.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+};
+
 // HistoryCard — card expansível de histórico de pedidos
 const HistoryCard: React.FC<{ 
   order: Order; 
@@ -80,6 +168,9 @@ const HistoryCard: React.FC<{
     order.status === 'Cancelado' ? 'bg-red-100 text-red-700' :
     'bg-yellow-100 text-yellow-700';
 
+  const scheduledPeriodLabel = order.scheduledPeriodName 
+    || (order.scheduledPeriod === 'manha' ? 'Manhã' : order.scheduledPeriod === 'tarde' ? 'Tarde' : order.scheduledPeriod === 'noite' ? 'Noite' : order.scheduledPeriod);
+
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
       <button onClick={() => setExpanded(e => !e)} className="w-full p-4 text-left">
@@ -88,7 +179,7 @@ const HistoryCard: React.FC<{
           <div className="flex items-center gap-1.5">
             {order.isScheduled && (
               <span className="text-[9px] font-bold px-2 py-0.5 rounded uppercase bg-purple-100 text-purple-800 border border-purple-200">
-                📅 {order.scheduledPeriod === 'manha' ? 'Manhã (08h-13h)' : 'Tarde (13h-19h)'}
+                📅 {scheduledPeriodLabel || 'Agendado'} {order.scheduledTimeRange ? `(${order.scheduledTimeRange})` : ''}
               </span>
             )}
             <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${statusColor}`}>{order.status}</span>
@@ -265,7 +356,29 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
   // Novos estados para modalidade de pedido: imediato vs agendado
   const [deliveryType, setDeliveryType] = useState<'immediate' | 'scheduled'>('immediate');
-  const [scheduledPeriod, setScheduledPeriod] = useState<'manha' | 'tarde'>('manha');
+
+  const activeDeliveryPeriods = useMemo(() => {
+    const list = businessInfo?.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+    const activeOnes = list.filter(p => p.active !== false);
+    return activeOnes.length > 0 ? activeOnes : DEFAULT_DELIVERY_PERIODS;
+  }, [businessInfo?.deliveryPeriods]);
+
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string>(() => {
+    return (businessInfo?.deliveryPeriods?.find(p => p.active !== false)?.id) || 'manha';
+  });
+
+  // Atualiza se o selectedPeriodId não existir mais nos ativos
+  useEffect(() => {
+    if (!activeDeliveryPeriods.some(p => p.id === selectedPeriodId)) {
+      if (activeDeliveryPeriods[0]) {
+        setSelectedPeriodId(activeDeliveryPeriods[0].id);
+      }
+    }
+  }, [activeDeliveryPeriods, selectedPeriodId]);
+
+  const currentSelectedPeriod = useMemo(() => {
+    return activeDeliveryPeriods.find(p => p.id === selectedPeriodId) || activeDeliveryPeriods[0];
+  }, [activeDeliveryPeriods, selectedPeriodId]);
 
   // Status da loja baseado em horários ou override manual do gestor
   const storeStatus = useMemo(() => {
@@ -915,7 +1028,8 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       }
 
       const isSched = deliveryType === 'scheduled';
-      const schedRange = scheduledPeriod === 'manha' ? '08:00 às 13:00' : '13:00 às 19:00';
+      const schedRange = currentSelectedPeriod ? `${currentSelectedPeriod.startTime} às ${currentSelectedPeriod.endTime}` : '08:00 às 13:00';
+      const periodName = currentSelectedPeriod?.name || 'Agendado';
 
       const newOrder: Order = {
         id: orderId,
@@ -936,9 +1050,10 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         status: isSched ? 'Pendente' : 'Pendente',
         isScheduled: isSched,
         scheduledDate: isSched ? scheduledDateInfo.display : undefined,
-        scheduledPeriod: isSched ? scheduledPeriod : undefined,
+        scheduledPeriod: isSched ? selectedPeriodId : undefined,
+        scheduledPeriodName: isSched ? periodName : undefined,
         scheduledTimeRange: isSched ? schedRange : undefined,
-        feedback: isSched ? `[Agendado para: ${scheduledDateInfo.display} - ${scheduledPeriod === 'manha' ? 'Manhã (08h às 13h)' : 'Tarde (13h às 19h)'}]` : undefined,
+        feedback: isSched ? `[Agendado para: ${scheduledDateInfo.display} - ${periodName} (${schedRange})]` : undefined,
         createdAt: new Date().toISOString()
       };
 
@@ -1343,10 +1458,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </div>
 
                   {deliveryType === 'scheduled' && (
-                    <div className="flex items-center justify-between text-[11px] font-bold text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded-lg">
-                      <span>📅 {scheduledDateInfo.display}</span>
-                      <span>{scheduledPeriod === 'manha' ? 'Manhã (08h-13h)' : 'Tarde (13h-19h)'}</span>
-                    </div>
+                    <ScheduledPeriodSelector
+                      periods={activeDeliveryPeriods}
+                      selectedId={selectedPeriodId}
+                      onSelect={setSelectedPeriodId}
+                      dateInfo={scheduledDateInfo}
+                    />
                   )}
 
                   {deliveryType === 'immediate' && !storeStatus.isOpen && (
@@ -1489,62 +1606,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     </div>
                   )}
 
-                  {/* No segundo item: abrir um novo div com possibilidade de pedir de manhã ou tarde */}
+                  {/* No segundo item: abrir o seletor dinâmico com possibilidade de escolher qualquer período */}
                   {deliveryType === 'scheduled' && (
-                    <div className="bg-purple-50/50 border border-purple-200/70 p-4 rounded-2xl space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-black text-purple-950 flex items-center gap-1.5">
-                          <Calendar className="w-3.5 h-3.5 text-purple-600" />
-                          Agendamento para {scheduledDateInfo.display}
-                        </span>
-                      </div>
-
-                      <div className="space-y-2">
-                        {/* Opção Manhã: 08:00 às 13:00 */}
-                        <div
-                          onClick={() => setScheduledPeriod('manha')}
-                          className={`flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
-                            scheduledPeriod === 'manha'
-                              ? 'bg-white border-purple-500 ring-2 ring-purple-400 shadow-sm'
-                              : 'bg-white/80 border-slate-200 hover:bg-white'
-                          }`}
-                        >
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-                            scheduledPeriod === 'manha' ? 'border-purple-600 bg-purple-600' : 'border-slate-300 bg-white'
-                          }`}>
-                            {scheduledPeriod === 'manha' && <div className="w-2 h-2 bg-white rounded-full" />}
-                          </div>
-                          <div className="flex-1">
-                            <p className="font-black text-xs text-slate-900 flex items-center gap-1.5">
-                              <Sun className="w-3.5 h-3.5 text-amber-500" /> Período da Manhã
-                            </p>
-                            <p className="text-[11px] text-slate-500 font-medium">Entrega entre 08:00 e 13:00</p>
-                          </div>
-                        </div>
-
-                        {/* Opção Tarde: 13:00 às 19:00 */}
-                        <div
-                          onClick={() => setScheduledPeriod('tarde')}
-                          className={`flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
-                            scheduledPeriod === 'tarde'
-                              ? 'bg-white border-purple-500 ring-2 ring-purple-400 shadow-sm'
-                              : 'bg-white/80 border-slate-200 hover:bg-white'
-                          }`}
-                        >
-                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
-                            scheduledPeriod === 'tarde' ? 'border-purple-600 bg-purple-600' : 'border-slate-300 bg-white'
-                          }`}>
-                            {scheduledPeriod === 'tarde' && <div className="w-2 h-2 bg-white rounded-full" />}
-                          </div>
-                          <div className="flex-1">
-                            <p className="font-black text-xs text-slate-900 flex items-center gap-1.5">
-                              <Sunset className="w-3.5 h-3.5 text-orange-500" /> Período da Tarde
-                            </p>
-                            <p className="text-[11px] text-slate-500 font-medium">Entrega entre 13:00 e 19:00</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+                    <ScheduledPeriodSelector
+                      periods={activeDeliveryPeriods}
+                      selectedId={selectedPeriodId}
+                      onSelect={setSelectedPeriodId}
+                      dateInfo={scheduledDateInfo}
+                    />
                   )}
                 </div>
 
