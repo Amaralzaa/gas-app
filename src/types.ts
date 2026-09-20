@@ -86,7 +86,8 @@ export interface Reward {
   title: string;
   description: string;
   pointsCost: number;
-  type: 'discount' | 'free_product' | 'voucher';
+  type: 'discount' | 'free_item' | 'free_product' | 'cashback' | 'voucher';
+  productId?: string;
   value?: number;
   validityDays?: number;
   minOrderValue?: number;

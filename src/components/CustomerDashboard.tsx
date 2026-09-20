@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { 
   MapPin, 
   History, 
@@ -7,30 +7,31 @@ import {
   ChevronRight, 
   Clock, 
   CheckCircle2, 
-  Package,
-  Search,
-  Home,
-  LogOut,
-  Minus,
-  Truck,
-  Navigation,
-  User,
-  Phone,
-  Ticket,
-  Star,
-  Copy,
-  Trash2,
-  X,
-  Users,
-  CreditCard,
-  Loader2,
-  Check,
-  AlertCircle,
-  Calendar,
-  Zap,
-  Sun,
-  Sunset,
-  Moon
+  Package, 
+  Search, 
+  Home, 
+  LogOut, 
+  Minus, 
+  Truck, 
+  Navigation, 
+  User, 
+  Phone, 
+  Ticket, 
+  Star, 
+  Copy, 
+  Trash2, 
+  X, 
+  Users, 
+  CreditCard, 
+  Loader2, 
+  Check, 
+  AlertCircle, 
+  Calendar, 
+  Zap, 
+  Sun, 
+  Sunset, 
+  Moon,
+  ShoppingCart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup } from 'react-leaflet';
@@ -651,6 +652,8 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     };
     onUpdateUser(updatedUser);
 
+    const rewardExpiry = new Date(Date.now() + (reward.validityDays || 30) * 24 * 60 * 60 * 1000).toISOString();
+
     if (reward.type === 'discount' && (reward.value || 15)) {
       const discountVal = reward.value || 15;
       const redeemedCoupon: Coupon = {
@@ -659,10 +662,53 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         type: 'fixed',
         value: discountVal,
         usageCount: 0,
-        isActive: true
+        isActive: true,
+        validUntil: rewardExpiry,
+        minOrderValue: reward.minOrderValue || 0
       };
       setAppliedCoupon(redeemedCoupon);
       showToast(`🎁 Recompensa aplicada! Cupom ${redeemedCoupon.code} de R$ ${discountVal},00 ativado no seu carrinho.`);
+    } else if (reward.type === 'free_item' || reward.type === 'free_product') {
+      if (reward.productId) {
+        const prod = PRODUCTS.find(p => p.id === reward.productId);
+        const freeVal = prod?.price || reward.value || 0;
+
+        // Insere 1 unidade do produto no carrinho
+        setCart(prev => ({
+          ...prev,
+          [reward.productId!]: (prev[reward.productId!] || 0) + 1
+        }));
+
+        // Aplica o benefício de 100% de desconto desse produto
+        const cleanName = (prod?.name || 'PRODUTO').toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 8);
+        const redeemedCoupon: Coupon = {
+          id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+          code: `BRINDE-${cleanName}`,
+          type: 'fixed',
+          value: freeVal,
+          usageCount: 0,
+          isActive: true,
+          validUntil: rewardExpiry,
+          minOrderValue: reward.minOrderValue || 0
+        };
+        setAppliedCoupon(redeemedCoupon);
+        showToast(`🎁 Recompensa resgatada! 1x ${prod?.name || 'Produto'} foi adicionado grátis ao seu carrinho!`);
+      } else if (reward.value && reward.value > 0) {
+        const redeemedCoupon: Coupon = {
+          id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+          code: `BRINDE${Math.round(reward.value)}`,
+          type: 'fixed',
+          value: reward.value,
+          usageCount: 0,
+          isActive: true,
+          validUntil: rewardExpiry,
+          minOrderValue: reward.minOrderValue || 0
+        };
+        setAppliedCoupon(redeemedCoupon);
+        showToast(`🎁 Recompensa resgatada! Benefício de R$ ${reward.value.toFixed(2)} ativado.`);
+      } else {
+        showToast(`🎁 Recompensa resgatada com sucesso!`);
+      }
     }
 
     setRewardConfirmation({ reward, stage: 'success' });
@@ -1296,7 +1342,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   <ChevronRight className="w-4 h-4 rotate-180" /> VOLTAR
                 </button>
                 <div className="max-w-md mx-auto">
-                  <h1 className="text-3xl font-black mb-2 text-yellow-400 text-center">GÁS EXPRESS</h1>
+                  <h1 className="text-3xl font-black mb-2 text-yellow-400 text-center uppercase">{businessInfo?.name || 'GÁS EXPRESS'}</h1>
                   <p className="text-slate-300 mb-8 text-center">Onde vamos entregar hoje?</p>
                   
                   {user.addresses?.length ? (
@@ -2145,14 +2191,29 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col cursor-pointer hover:border-yellow-300 hover:shadow-md transition-all group relative"
                         >
                           <div className="flex justify-between items-start mb-2">
-                            <div className="bg-slate-50 p-3 rounded-2xl group-hover:bg-yellow-50 transition-colors">
-                              {reward.type === 'discount' ? <Ticket className="text-blue-500 w-6 h-6" /> : <Package className="text-green-500 w-6 h-6" />}
+                            <div className="bg-slate-50 p-2.5 rounded-2xl group-hover:bg-yellow-50 transition-colors">
+                              {reward.productId && PRODUCTS.find(p => p.id === reward.productId)?.image ? (
+                                <img 
+                                  src={PRODUCTS.find(p => p.id === reward.productId)?.image} 
+                                  alt={reward.title} 
+                                  className="w-8 h-8 rounded-xl object-cover" 
+                                />
+                              ) : reward.type === 'discount' ? (
+                                <Ticket className="text-blue-500 w-6 h-6" />
+                              ) : (
+                                <Package className="text-green-500 w-6 h-6" />
+                              )}
                             </div>
                             <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black px-3 py-1 rounded-full">
                               {reward.pointsCost} PTS
                             </span>
                           </div>
                           <h4 className="font-black text-slate-900 group-hover:text-yellow-600 transition-colors">{reward.title}</h4>
+                          {reward.productId && (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md inline-block w-fit mt-1">
+                              ✓ Adiciona produto grátis no carrinho
+                            </span>
+                          )}
                           <p className="text-xs text-slate-500 mt-1 mb-2 flex-1">{reward.description}</p>
 
                           <div className="flex items-center gap-1 text-[11px] font-bold text-yellow-600 mb-3">
@@ -3707,17 +3768,37 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     Você resgatou com sucesso <strong className="text-slate-950 font-black">{rewardConfirmation.reward.title}</strong>!
                   </p>
 
-                  <div className="bg-emerald-50 border border-emerald-100 p-3.5 rounded-2xl mb-5 text-xs text-emerald-800">
+                  <div className="bg-emerald-50 border border-emerald-100 p-3.5 rounded-2xl mb-4 text-xs text-emerald-800">
                     <p className="font-bold">Novo saldo disponível:</p>
                     <p className="text-lg font-black text-emerald-950">{user.points || 0} pontos</p>
                   </div>
 
-                  <button
-                    onClick={() => setRewardConfirmation(null)}
-                    className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl text-xs transition-all shadow-lg shadow-slate-900/15"
-                  >
-                    CONCLUIR
-                  </button>
+                  {rewardConfirmation.reward.productId && (
+                    <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-2xl mb-5 text-xs text-amber-900 flex items-center gap-2.5 text-left">
+                      <Package className="w-5 h-5 text-amber-600 shrink-0" />
+                      <span>1 unidade de <strong>{PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.name || 'Produto'}</strong> foi inserida gratuitamente no seu carrinho!</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <button
+                      onClick={() => {
+                        setRewardConfirmation(null);
+                        setActiveTab('home');
+                        setStep('checkout');
+                      }}
+                      className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-black py-3.5 rounded-2xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
+                    >
+                      <ShoppingCart className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+                      IR PARA O CARRINHO E FINALIZAR
+                    </button>
+                    <button
+                      onClick={() => setRewardConfirmation(null)}
+                      className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-3 rounded-2xl text-xs transition-colors cursor-pointer"
+                    >
+                      CONTINUAR NAVEGANDO
+                    </button>
+                  </div>
                 </>
               )}
             </motion.div>

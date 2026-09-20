@@ -110,7 +110,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   onUpdateBusinessInfo
 }) => {
   const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators' | 'meu_negocio'>('tracking');
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos'>('Todos');
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos' | 'Avaliados'>('Todos');
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<Order | null>(null);
   const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
@@ -282,6 +282,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     description: string;
     pointsCost: number;
     type: 'discount' | 'free_item' | 'cashback';
+    productId: string;
     value: number;
     validityDays: number;
     minOrderValue: number;
@@ -292,6 +293,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     description: '',
     pointsCost: 200,
     type: 'discount',
+    productId: '',
     value: 10,
     validityDays: 30,
     minOrderValue: 0,
@@ -390,7 +392,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
   const filteredOrders = useMemo(() => {
     return orders.filter(o => {
-      const matchesStatus = statusFilter === 'Todos' || o.status === statusFilter;
+      const matchesStatus = statusFilter === 'Todos'
+        ? true
+        : statusFilter === 'Avaliados'
+        ? Boolean(o.serviceRating || o.deliveryRating || o.rating)
+        : o.status === statusFilter;
       const matchesSearch = matchesOrderSearch(o, orderSearchQuery);
       return matchesStatus && matchesSearch;
     });
@@ -533,6 +539,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         description: rewardForm.description.trim(),
         pointsCost: Number(rewardForm.pointsCost) || 100,
         type: rewardForm.type,
+        productId: rewardForm.productId ? rewardForm.productId : undefined,
         value: Number(rewardForm.value) || 0,
         validityDays: Number(rewardForm.validityDays) || 30,
         minOrderValue: Number(rewardForm.minOrderValue) || 0,
@@ -547,6 +554,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         description: rewardForm.description.trim(),
         pointsCost: Number(rewardForm.pointsCost) || 100,
         type: rewardForm.type,
+        productId: rewardForm.productId ? rewardForm.productId : undefined,
         value: Number(rewardForm.value) || 0,
         validityDays: Number(rewardForm.validityDays) || 30,
         minOrderValue: Number(rewardForm.minOrderValue) || 0,
@@ -653,14 +661,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     <div className="min-h-screen bg-slate-50 flex">
       {/* Sidebar */}
       <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col sticky top-0 h-screen">
-        <div className="p-8">
-          <h1 className="text-xl font-black tracking-tighter flex items-center gap-2">
-            <div className="bg-yellow-400 w-8 h-8 rounded-lg flex items-center justify-center">
-              <Package className="text-slate-900 w-5 h-5" />
-            </div>
-            GÁS EXPRESS
-          </h1>
-          <p className="text-[10px] font-bold text-slate-500 mt-1 uppercase tracking-widest">Painel Gestor</p>
+        <div className="px-6 py-5 border-b border-slate-800/80 mb-2">
+          <div className="flex items-center gap-2.5">
+            <div className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse"></div>
+            <span className="text-[11px] font-black uppercase tracking-widest text-slate-300">
+              Painel do Gestor
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-500 mt-0.5 font-medium">Controle operacional</p>
         </div>
 
         <nav className="flex-1 px-4 space-y-2 overflow-y-auto">
@@ -763,29 +771,18 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
       {/* Main Content */}
       <main className="flex-1 pb-20">
-        {/* Mobile Header */}
-        <header className="md:hidden p-6 bg-white border-b border-slate-100 flex items-center justify-between sticky top-0 z-30 overflow-x-auto">
-          <h1 className="text-xl font-black text-slate-900 shrink-0 mr-4">Gás Express</h1>
-          <div className="flex gap-2">
-            {(user.role === 'gestor' || user.allowedTabs?.includes('dashboard')) && <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-lg ${activeTab === 'dashboard' ? 'bg-yellow-400' : 'bg-slate-100'}`}><LayoutDashboard className="w-5 h-5" /></button>}
-            {(user.role === 'gestor' || user.allowedTabs?.includes('tracking')) && <button onClick={() => setActiveTab('tracking')} className={`p-2 rounded-lg ${activeTab === 'tracking' ? 'bg-yellow-400' : 'bg-slate-100'}`}><Clock className="w-5 h-5" /></button>}
-            {(user.role === 'gestor' || user.allowedTabs?.includes('orders')) && <button onClick={() => setActiveTab('orders')} className={`p-2 rounded-lg ${activeTab === 'orders' ? 'bg-yellow-400' : 'bg-slate-100'}`}><Package className="w-5 h-5" /></button>}
-            {(user.role === 'gestor' || user.allowedTabs?.includes('map')) && <button onClick={() => setActiveTab('map')} className={`p-2 rounded-lg ${activeTab === 'map' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapIcon className="w-5 h-5" /></button>}
-            {(user.role === 'gestor' || user.allowedTabs?.includes('coverage')) && <button onClick={() => setActiveTab('coverage')} className={`p-2 rounded-lg ${activeTab === 'coverage' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapPin className="w-5 h-5" /></button>}
-            {user.role === 'gestor' && <button onClick={() => setActiveTab('collaborators')} className={`p-2 rounded-lg ${activeTab === 'collaborators' ? 'bg-yellow-400' : 'bg-slate-100'}`}><Users className="w-5 h-5" /></button>}
-            {user.role === 'gestor' && <button onClick={() => setActiveTab('meu_negocio')} className={`p-2 rounded-lg ${activeTab === 'meu_negocio' ? 'bg-yellow-400' : 'bg-slate-100'}`} title="Meu Negócio"><Store className="w-5 h-5" /></button>}
-            {onLogout && (
-              <button 
-                type="button" 
-                onClick={onLogout} 
-                className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 border border-red-200" 
-                title="Sair da Conta"
-              >
-                <LogOut className="w-5 h-5" />
-              </button>
-            )}
+        {/* Mobile Tab Bar */}
+        <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between sticky top-[57px] z-30 overflow-x-auto shadow-sm">
+          <div className="flex items-center gap-2">
+            {(user.role === 'gestor' || user.allowedTabs?.includes('dashboard')) && <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Métricas"><LayoutDashboard className="w-5 h-5" /></button>}
+            {(user.role === 'gestor' || user.allowedTabs?.includes('tracking')) && <button onClick={() => setActiveTab('tracking')} className={`p-2 rounded-xl transition-all ${activeTab === 'tracking' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Acompanhamento"><Clock className="w-5 h-5" /></button>}
+            {(user.role === 'gestor' || user.allowedTabs?.includes('orders')) && <button onClick={() => setActiveTab('orders')} className={`p-2 rounded-xl transition-all ${activeTab === 'orders' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Pedidos"><Package className="w-5 h-5" /></button>}
+            {(user.role === 'gestor' || user.allowedTabs?.includes('map')) && <button onClick={() => setActiveTab('map')} className={`p-2 rounded-xl transition-all ${activeTab === 'map' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Monitoramento"><MapIcon className="w-5 h-5" /></button>}
+            {(user.role === 'gestor' || user.allowedTabs?.includes('coverage')) && <button onClick={() => setActiveTab('coverage')} className={`p-2 rounded-xl transition-all ${activeTab === 'coverage' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Cobertura"><MapPin className="w-5 h-5" /></button>}
+            {user.role === 'gestor' && <button onClick={() => setActiveTab('collaborators')} className={`p-2 rounded-xl transition-all ${activeTab === 'collaborators' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Colaboradores"><Users className="w-5 h-5" /></button>}
+            {user.role === 'gestor' && <button onClick={() => setActiveTab('meu_negocio')} className={`p-2 rounded-xl transition-all ${activeTab === 'meu_negocio' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Meu Negócio"><Store className="w-5 h-5" /></button>}
           </div>
-        </header>
+        </div>
 
         <div className="p-6 lg:p-10 max-w-6xl mx-auto">
           <header className="hidden md:flex items-center justify-between mb-10">
@@ -1264,7 +1261,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     const link = `${window.location.origin}?phone=${o.phone}`;
-                                    const message = `Olá ${o.customerName}, seu pedido na Gás Express está a caminho! Acompanhe a entrega em tempo real: ${link}`;
+                                    const storeName = businessInfo?.name?.trim() || 'Gás Express';
+                                    const message = `Olá ${o.customerName}, seu pedido na ${storeName} está a caminho! Acompanhe a entrega em tempo real: ${link}`;
                                     window.open(`https://wa.me/55${o.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
                                   }}
                                   className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-1 rounded-lg transition-colors"
@@ -1327,15 +1325,32 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
               {/* Filtros de Status */}
               <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
-                {(['Todos', 'Pendente', 'Atribuído', 'Em Rota', 'Concluído', 'Cancelado'] as const).map(s => (
-                  <button 
-                    key={s} 
-                    onClick={() => setStatusFilter(s)} 
-                    className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${statusFilter === s ? 'bg-slate-900 text-white shadow-sm' : 'bg-white text-slate-500 shadow-sm hover:bg-slate-50'}`}
-                  >
-                    {s}
-                  </button>
-                ))}
+                {(['Todos', 'Pendente', 'Atribuído', 'Em Rota', 'Concluído', 'Cancelado', 'Avaliados'] as const).map(s => {
+                  const evaluatedCount = orders.filter(ord => ord.serviceRating || ord.deliveryRating || ord.rating).length;
+                  return (
+                    <button 
+                      key={s} 
+                      onClick={() => setStatusFilter(s)} 
+                      className={`px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                        statusFilter === s 
+                          ? 'bg-slate-900 text-white shadow-sm' 
+                          : s === 'Avaliados'
+                          ? 'bg-amber-50 text-amber-900 border border-amber-200/80 hover:bg-amber-100 shadow-sm'
+                          : 'bg-white text-slate-500 shadow-sm hover:bg-slate-50'
+                      }`}
+                    >
+                      {s === 'Avaliados' && <Star className="w-3.5 h-3.5 text-yellow-500 fill-current" />}
+                      <span>{s}</span>
+                      {s === 'Avaliados' && (
+                        <span className={`text-[10px] font-black px-1.5 py-0.2 rounded-full ${
+                          statusFilter === s ? 'bg-yellow-400 text-slate-900' : 'bg-amber-200/70 text-amber-950'
+                        }`}>
+                          {evaluatedCount}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
 
               <div className="space-y-3">
@@ -1404,6 +1419,44 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             }`}>{o.status}</span>
                           </div>
                         </div>
+
+                        {/* Indicadores de Avaliação do Pedido (Estabelecimento e Entrega) */}
+                        {((o.serviceRating || o.deliveryRating || o.rating) || o.status === 'Concluído') && (
+                          <div className="pt-2.5 pb-1 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                            {(o.serviceRating || o.deliveryRating || o.rating) ? (
+                              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">
+                                  Avaliação:
+                                </span>
+                                {(o.serviceRating || o.rating) && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-amber-50 text-amber-900 border border-amber-200/80 px-2 py-0.5 rounded-lg shadow-xs">
+                                    <Store className="w-3 h-3 text-amber-600" />
+                                    <span>Estabelecimento:</span>
+                                    <span className="font-black flex items-center gap-0.5 text-amber-900">
+                                      <Star className="w-3 h-3 text-yellow-500 fill-current" />
+                                      {(o.serviceRating || o.rating)}/5
+                                    </span>
+                                  </span>
+                                )}
+                                {(o.deliveryRating || o.rating) && (
+                                  <span className="inline-flex items-center gap-1 text-[11px] font-bold bg-blue-50 text-blue-900 border border-blue-200/80 px-2 py-0.5 rounded-lg shadow-xs">
+                                    <Truck className="w-3 h-3 text-blue-600" />
+                                    <span>Entrega:</span>
+                                    <span className="font-black flex items-center gap-0.5 text-blue-900">
+                                      <Star className="w-3 h-3 text-yellow-500 fill-current" />
+                                      {(o.deliveryRating || o.rating)}/5
+                                    </span>
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-[11px] font-medium text-slate-400">
+                                <Clock className="w-3 h-3 text-slate-300" />
+                                <span>Aguardando avaliação do cliente</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
 
                         <div className="pt-3 border-t border-slate-50 flex items-center justify-between text-xs text-slate-500">
                           <span className="font-medium truncate max-w-[280px]">
@@ -1801,6 +1854,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             description: '',
                             pointsCost: 200,
                             type: 'discount',
+                            productId: '',
                             value: 10,
                             validityDays: 30,
                             minOrderValue: 0,
@@ -1832,7 +1886,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             <p className="text-xs text-slate-500 mb-3">{reward.description}</p>
                             
                             <div className="space-y-1 text-[11px] text-slate-600 font-medium bg-white p-3 rounded-xl border border-slate-100 mb-3">
-                              <p><strong>Tipo:</strong> {reward.type === 'discount' ? 'Desconto em R$' : reward.type === 'free_item' ? 'Brinde / Produto Grátis' : 'Cashback'}</p>
+                              <p><strong>Tipo:</strong> {reward.type === 'discount' ? 'Desconto em R$' : (reward.type === 'free_item' || reward.type === 'free_product') ? 'Brinde / Produto Grátis' : 'Cashback'}</p>
+                              {reward.productId && (
+                                <p className="text-emerald-700 font-bold flex items-center gap-1">
+                                  <Package className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                  <span>Produto: {PRODUCTS.find(p => p.id === reward.productId)?.name || reward.productId}</span>
+                                </p>
+                              )}
                               {reward.value && <p><strong>Benefício:</strong> R$ {reward.value.toFixed(2)}</p>}
                               {reward.validityDays && <p><strong>Validade:</strong> {reward.validityDays} dias após resgate</p>}
                               {reward.minOrderValue ? <p><strong>Uso Mínimo:</strong> R$ {reward.minOrderValue.toFixed(2)}</p> : <p><strong>Uso Mínimo:</strong> Sem valor mínimo</p>}
@@ -1857,7 +1917,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                                   title: reward.title,
                                   description: reward.description,
                                   pointsCost: reward.pointsCost,
-                                  type: reward.type || 'discount',
+                                  type: (reward.type === 'free_product' ? 'free_item' : reward.type) || 'discount',
+                                  productId: reward.productId || '',
                                   value: reward.value || 0,
                                   validityDays: reward.validityDays || 30,
                                   minOrderValue: reward.minOrderValue || 0,
@@ -2484,6 +2545,59 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   </div>
                 </div>
 
+                {rewardForm.type === 'free_item' && (
+                  <div className="bg-amber-50/70 p-4 rounded-2xl border border-amber-200 space-y-2">
+                    <label className="block text-xs font-black text-amber-900 uppercase flex items-center gap-1.5">
+                      <Package className="w-4 h-4 text-amber-600" />
+                      Vincular Produto do Catálogo
+                    </label>
+                    <select 
+                      className="w-full p-3.5 bg-white rounded-xl border border-amber-200 focus:ring-2 focus:ring-yellow-400 outline-none transition-all text-sm font-bold text-slate-800"
+                      value={rewardForm.productId}
+                      onChange={(e) => {
+                        const prodId = e.target.value;
+                        const prod = PRODUCTS.find(p => p.id === prodId);
+                        if (prod) {
+                          const multiplier = benefitsConfig?.pointsPerCurrency || 10;
+                          const suggestedPoints = Math.round(prod.price * multiplier);
+                          const shouldUpdateTitle = !rewardForm.title.trim() || PRODUCTS.some(p => rewardForm.title.includes(p.name));
+                          const shouldUpdateDesc = !rewardForm.description.trim() || PRODUCTS.some(p => rewardForm.description.includes(p.name));
+                          setRewardForm({
+                            ...rewardForm,
+                            productId: prodId,
+                            value: prod.price,
+                            pointsCost: suggestedPoints,
+                            title: shouldUpdateTitle ? `${prod.name} Grátis` : rewardForm.title,
+                            description: shouldUpdateDesc ? `Resgate 1x ${prod.name} grátis com seus pontos.` : rewardForm.description
+                          });
+                        } else {
+                          setRewardForm({
+                            ...rewardForm,
+                            productId: ''
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">Nenhum / Brinde Avulso (Não adiciona ao carrinho)</option>
+                      {PRODUCTS.map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.name} — R$ {p.price.toFixed(2)}
+                        </option>
+                      ))}
+                    </select>
+                    {rewardForm.productId ? (
+                      <div className="flex items-center gap-1.5 text-[11px] text-amber-900 font-bold bg-amber-100/70 p-2 rounded-lg">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>Produto vinculado! Valor ajustado para R$ {PRODUCTS.find(p => p.id === rewardForm.productId)?.price.toFixed(2)} e pontuação sugerida: {rewardForm.pointsCost} pts.</span>
+                      </div>
+                    ) : (
+                      <p className="text-[10px] text-amber-700 font-medium">
+                        Vincule um produto para que ele seja inserido automaticamente no carrinho do cliente com valor R$ 0,00 no resgate.
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-500 uppercase mb-1 ml-1">Valor do Benefício (R$)</label>
@@ -2717,6 +2831,188 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     </div>
                   )}
 
+                  {/* Seção: Avaliação do Cliente (Estabelecimento & Entrega) */}
+                  {(o.status === 'Concluído' || (o.serviceRating || o.deliveryRating || o.rating)) && (() => {
+                    const cleanFeedback = o.feedback
+                      ?.replace(/\[Agendado para:.*?\]/g, '')
+                      ?.replace(/\[Cancelamento\]:.*?$/g, '')
+                      ?.trim();
+                    const hasRatings = Boolean(o.serviceRating || o.deliveryRating || o.rating || cleanFeedback);
+                    const sRating = o.serviceRating || o.rating;
+                    const dRating = o.deliveryRating || o.rating;
+
+                    const getRatingDesc = (val?: number) => {
+                      if (!val) return 'Não avaliado';
+                      if (val >= 5) return 'Excelente (5 estrelas)';
+                      if (val >= 4) return 'Muito Bom (4 estrelas)';
+                      if (val >= 3) return 'Regular (3 estrelas)';
+                      if (val >= 2) return 'Ruim (2 estrelas)';
+                      return 'Muito Ruim (1 estrela)';
+                    };
+
+                    return (
+                      <div className="bg-gradient-to-br from-amber-50/70 to-yellow-50/40 border-2 border-yellow-200 rounded-3xl p-5 sm:p-6 shadow-sm space-y-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-yellow-200/70 pb-3.5">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-2xl bg-yellow-400/25 text-yellow-700 flex items-center justify-center shrink-0">
+                              <Star className="w-5 h-5 fill-current text-yellow-500" />
+                            </div>
+                            <div>
+                              <h4 className="font-black text-slate-900 text-base">
+                                Avaliação do Cliente
+                              </h4>
+                              <p className="text-[11px] text-slate-500 font-medium">
+                                Feedback detalhado sobre o atendimento do estabelecimento e a entrega
+                              </p>
+                            </div>
+                          </div>
+                          <div>
+                            {hasRatings ? (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Pedido Avaliado
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                <Clock className="w-3.5 h-3.5 text-slate-400" /> Aguardando Avaliação
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {hasRatings ? (
+                          <>
+                            {/* Grid com os 2 tipos de avaliações: Estabelecimento e Entrega */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                              
+                              {/* 1. Avaliação do Estabelecimento (Porto Gás / Atendimento) */}
+                              <div className="bg-white p-4 rounded-2xl border border-yellow-200/80 shadow-xs space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                                      <Store className="w-4 h-4 text-amber-600" />
+                                    </div>
+                                    <div>
+                                      <span className="text-xs font-black text-slate-800 uppercase tracking-wide block">
+                                        Estabelecimento
+                                      </span>
+                                      <span className="text-[10px] font-bold text-slate-400">Atendimento da Empresa</span>
+                                    </div>
+                                  </div>
+                                  {sRating && (
+                                    <span className="text-xs font-black bg-amber-100 text-amber-800 px-2 py-0.5 rounded-lg">
+                                      {sRating}/5
+                                    </span>
+                                  )}
+                                </div>
+
+                                {sRating ? (
+                                  <div className="pt-1">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="flex items-center gap-1">
+                                        {[1, 2, 3, 4, 5].map(st => (
+                                          <Star
+                                            key={st}
+                                            className={`w-5 h-5 ${
+                                              st <= sRating ? 'text-yellow-400 fill-current' : 'text-slate-200'
+                                            }`}
+                                          />
+                                        ))}
+                                      </div>
+                                      <span className="text-sm font-black text-slate-900">
+                                        {sRating}.0
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-bold text-amber-700 mt-1.5">
+                                      {getRatingDesc(sRating)}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs font-medium text-slate-400 italic py-1.5">
+                                    Nenhuma nota de atendimento atribuída.
+                                  </p>
+                                )}
+                              </div>
+
+                              {/* 2. Avaliação da Entrega (Entregador / Agilidade) */}
+                              <div className="bg-white p-4 rounded-2xl border border-blue-200/80 shadow-xs space-y-2.5">
+                                <div className="flex items-center justify-between">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-8 h-8 rounded-xl bg-blue-100 text-blue-700 flex items-center justify-center">
+                                      <Truck className="w-4 h-4 text-blue-600" />
+                                    </div>
+                                    <div>
+                                      <span className="text-xs font-black text-slate-800 uppercase tracking-wide block">
+                                        Entrega
+                                      </span>
+                                      <span className="text-[10px] font-bold text-slate-400">
+                                        {assignedDriver ? `Entregador: ${assignedDriver.name}` : 'Serviço de Entrega'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  {dRating && (
+                                    <span className="text-xs font-black bg-blue-100 text-blue-800 px-2 py-0.5 rounded-lg">
+                                      {dRating}/5
+                                    </span>
+                                  )}
+                                </div>
+
+                                {dRating ? (
+                                  <div className="pt-1">
+                                    <div className="flex items-center gap-2.5">
+                                      <div className="flex items-center gap-1">
+                                        {[1, 2, 3, 4, 5].map(st => (
+                                          <Star
+                                            key={st}
+                                            className={`w-5 h-5 ${
+                                              st <= dRating ? 'text-yellow-400 fill-current' : 'text-slate-200'
+                                            }`}
+                                          />
+                                        ))}
+                                      </div>
+                                      <span className="text-sm font-black text-slate-900">
+                                        {dRating}.0
+                                      </span>
+                                    </div>
+                                    <p className="text-xs font-bold text-blue-700 mt-1.5">
+                                      {getRatingDesc(dRating)}
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <p className="text-xs font-medium text-slate-400 italic py-1.5">
+                                    Nenhuma nota de entrega atribuída.
+                                  </p>
+                                )}
+                              </div>
+
+                            </div>
+
+                            {/* Comentário ou Feedback deixado pelo cliente */}
+                            {cleanFeedback && (
+                              <div className="bg-white p-4 rounded-2xl border border-yellow-200/80 space-y-1.5">
+                                <div className="flex items-center gap-1.5 text-xs font-black text-slate-700">
+                                  <MessageSquare className="w-4 h-4 text-amber-600" />
+                                  <span>Mensagem / Comentário do Cliente:</span>
+                                </div>
+                                <p className="text-xs text-slate-800 font-medium italic bg-yellow-50/50 p-3 rounded-xl border border-yellow-100">
+                                  "{cleanFeedback}"
+                                </p>
+                              </div>
+                            )}
+                          </>
+                        ) : (
+                          <div className="bg-white/80 p-5 rounded-2xl border border-dashed border-slate-200 text-center space-y-1">
+                            <p className="text-xs font-bold text-slate-700">
+                              O cliente ainda não enviou a avaliação para este pedido.
+                            </p>
+                            <p className="text-[11px] text-slate-400 max-w-md mx-auto">
+                              Assim que o cliente registrar a avaliação de Atendimento e Entrega no aplicativo, os resultados serão exibidos aqui em tempo real.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Grid: Cliente & Endereço */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     
@@ -2750,7 +3046,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             Ligar
                           </a>
                           <a 
-                            href={`https://wa.me/55${o.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${o.customerName}, referente ao seu pedido #${o.id} na Gás Express...`)}`} 
+                            href={`https://wa.me/55${o.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${o.customerName}, referente ao seu pedido #${o.id} na ${businessInfo?.name || 'Gás Express'}...`)}`} 
                             target="_blank" 
                             rel="noopener noreferrer"
                             className="flex-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-700 py-2 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition-colors"
@@ -2922,6 +3218,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               <th className="py-2.5 px-3 text-right">Valor</th>
                               <th className="py-2.5 px-3 text-center">Pagamento</th>
                               <th className="py-2.5 px-3 text-center">Status</th>
+                              <th className="py-2.5 px-3 text-center">Avaliação</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
@@ -2964,6 +3261,20 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                                     }`}>
                                       {histOrder.status}
                                     </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center whitespace-nowrap">
+                                    {(histOrder.serviceRating || histOrder.deliveryRating || histOrder.rating) ? (
+                                      <div className="inline-flex items-center gap-1 font-bold text-slate-800 text-[11px] bg-amber-50 border border-amber-200/80 px-2 py-0.5 rounded-lg" title={`Estabelecimento: ${histOrder.serviceRating || histOrder.rating || '-'}/5 | Entrega: ${histOrder.deliveryRating || histOrder.rating || '-'}/5`}>
+                                        <Star className="w-3 h-3 text-yellow-500 fill-current" />
+                                        <span>
+                                          {histOrder.serviceRating && histOrder.deliveryRating
+                                            ? ((histOrder.serviceRating + histOrder.deliveryRating) / 2).toFixed(1)
+                                            : (histOrder.serviceRating || histOrder.deliveryRating || histOrder.rating)}
+                                        </span>
+                                      </div>
+                                    ) : (
+                                      <span className="text-slate-300 text-xs font-semibold">-</span>
+                                    )}
                                   </td>
                                 </tr>
                               );

@@ -22,7 +22,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { AppUser, Order, Expense, Product, Address } from '../types';
+import { AppUser, Order, Expense, Product, Address, BusinessInfo } from '../types';
 import { PRODUCTS } from '../constants';
 import { playAssignedOrderSound, unlockAudio } from '../utils/sounds';
 
@@ -35,9 +35,20 @@ interface DeliveryDashboardProps {
   onUpdateUser: (user: AppUser) => void;
   expenses: Expense[];
   allCustomers: AppUser[];
+  businessInfo?: BusinessInfo;
 }
 
-export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ user, orders, onUpdateOrder, onAddOrder, onAddExpense, onUpdateUser, expenses, allCustomers }) => {
+export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ 
+  user, 
+  orders, 
+  onUpdateOrder, 
+  onAddOrder, 
+  onAddExpense, 
+  onUpdateUser, 
+  expenses, 
+  allCustomers,
+  businessInfo 
+}) => {
   const [activeTab, setActiveTab] = useState<'deliveries' | 'map' | 'finance'>('deliveries');
   const [isAddingSale, setIsAddingSale] = useState(false);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
@@ -307,7 +318,8 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ user, orde
                       <button
                         onClick={() => {
                           const link = `${window.location.origin}?phone=${o.phone}`;
-                          const message = `Olá ${o.customerName}, aqui é o entregador da Gás Express! Estou saindo com seu pedido agora. Acompanhe minha localização em tempo real aqui: ${link}`;
+                          const storeName = businessInfo?.name?.trim() || 'Gás Express';
+                          const message = `Olá ${o.customerName}, aqui é o entregador da ${storeName}! Estou saindo com seu pedido agora. Acompanhe minha localização em tempo real aqui: ${link}`;
                           window.open(`https://wa.me/55${o.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
                         }}
                         className="w-full bg-slate-700 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm text-yellow-400"

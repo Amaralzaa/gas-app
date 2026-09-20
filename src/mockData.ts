@@ -21,6 +21,25 @@ export const MOCK_USERS: AppUser[] = [
     addresses: [],
     location: { lat: -22.9013209, lng: -43.1189942 },
     allowedTabs: []
+  },
+  {
+    id: 'cust-demo-1',
+    name: 'Maria Silva (Cliente)',
+    email: 'cliente@portogas.com',
+    role: 'cliente',
+    phone: '21999998888',
+    points: 500,
+    addresses: [
+      {
+        cep: '24220-000',
+        street: 'Rua Coronel Moreira César',
+        number: '123',
+        neighborhood: 'Icaraí',
+        city: 'Niterói',
+        state: 'RJ'
+      }
+    ],
+    allowedTabs: []
   }
 ];
 
@@ -105,7 +124,9 @@ export const MOCK_REWARDS: Reward[] = [
     title: 'Galão de Água 20L Grátis',
     description: 'Resgate um galão de água mineral 20L de graça com sua entrega.',
     pointsCost: 150,
-    type: 'free_product',
+    type: 'free_item',
+    productId: 'water20',
+    value: 18,
     validityDays: 15,
     minOrderValue: 0,
     rules: [

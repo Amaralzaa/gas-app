@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   MapPin, 
@@ -53,6 +53,20 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  useEffect(() => {
+    if (businessInfo) {
+      setForm(prev => ({
+        ...businessInfo,
+        name: businessInfo.name || prev.name || '',
+        tradeName: businessInfo.tradeName || prev.tradeName || '',
+        logoUrl: businessInfo.logoUrl !== undefined ? businessInfo.logoUrl : prev.logoUrl,
+        deliveryPeriods: (businessInfo.deliveryPeriods && businessInfo.deliveryPeriods.length > 0)
+          ? businessInfo.deliveryPeriods
+          : (prev.deliveryPeriods && prev.deliveryPeriods.length > 0 ? prev.deliveryPeriods : DEFAULT_DELIVERY_PERIODS)
+      }));
+    }
+  }, [businessInfo]);
 
   const periods = form.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
 
@@ -220,10 +234,11 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
 
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 pt-2">
             {/* Logo Preview & Upload */}
-            <div className="flex flex-col items-center gap-2">
+            <div className="flex flex-col items-center gap-2 shrink-0">
               <div 
                 onClick={() => setIsCropperOpen(true)}
-                className="relative group cursor-pointer w-28 h-28 rounded-full overflow-hidden border-4 border-yellow-400 shadow-lg bg-slate-50 flex items-center justify-center transition-all hover:scale-105"
+                className="relative group cursor-pointer w-28 h-28 rounded-3xl overflow-hidden border-4 border-yellow-400 shadow-lg bg-white flex items-center justify-center transition-all hover:scale-105"
+                title="Clique para carregar ou redimensionar a logo"
               >
                 {form.logoUrl ? (
                   <img src={form.logoUrl} alt="Logo" className="w-full h-full object-cover" />
@@ -235,25 +250,49 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
                   <span className="text-[10px] font-bold mt-1">Alterar</span>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setIsCropperOpen(true)}
-                className="text-xs font-bold text-yellow-700 bg-yellow-50 hover:bg-yellow-100 px-3 py-1.5 rounded-xl transition-colors border border-yellow-200"
-              >
-                Redimensionar Logo
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setIsCropperOpen(true)}
+                  className="text-xs font-bold text-yellow-800 bg-yellow-100 hover:bg-yellow-200 px-3 py-1.5 rounded-xl transition-colors border border-yellow-300 shadow-xs"
+                >
+                  {form.logoUrl ? 'Redimensionar' : 'Adicionar Logo'}
+                </button>
+                {form.logoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = { ...form, logoUrl: '' };
+                      setForm(updated);
+                      onSave(updated);
+                    }}
+                    className="text-xs font-bold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-xl transition-colors border border-red-200"
+                    title="Remover logotipo e retornar ao ícone padrão"
+                  >
+                    Remover
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* Campos de texto */}
             <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Nome Fantasia (Aparece aos clientes)</label>
+              <div className="sm:col-span-2 bg-yellow-50/50 p-4 rounded-2xl border border-yellow-200/80">
+                <label className="block text-xs font-black text-slate-800 uppercase mb-1 flex flex-wrap items-center justify-between gap-1">
+                  <span>Nome do Estabelecimento / Marca Principal</span>
+                  <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300">
+                    Aparece no Cabeçalho e em todo o App
+                  </span>
+                </label>
+                <p className="text-xs text-slate-500 mb-2 font-medium">
+                  Substitui o nome padrão <strong>"Gás Express"</strong> no cabeçalho fixo superior, na tela de login, nos pedidos e nas mensagens do WhatsApp.
+                </p>
                 <input
                   type="text"
                   required
                   value={form.name}
                   onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
-                  className="w-full p-3.5 bg-slate-50 rounded-2xl border border-slate-200 focus:border-yellow-400 focus:ring-1 focus:ring-yellow-400 outline-none text-sm font-bold"
+                  className="w-full p-3.5 bg-white rounded-xl border border-yellow-300 focus:border-yellow-500 focus:ring-2 focus:ring-yellow-400 outline-none text-base font-black text-slate-900 shadow-sm"
                   placeholder="Ex: Porto Gás Distribuidora"
                 />
               </div>
@@ -699,7 +738,9 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
         onClose={() => setIsCropperOpen(false)}
         initialImage={form.logoUrl}
         onSave={(dataUrl) => {
-          setForm(f => ({ ...f, logoUrl: dataUrl }));
+          const updated = { ...form, logoUrl: dataUrl };
+          setForm(updated);
+          onSave(updated);
         }}
       />
     </div>

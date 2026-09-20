@@ -55,7 +55,15 @@ import {
 
 // --- Components ---
 
-const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, onRegister: (user: AppUser) => void }) => {
+const LoginView = ({ 
+  onLogin, 
+  onRegister, 
+  businessInfo 
+}: { 
+  onLogin: (user: AppUser) => void; 
+  onRegister: (user: AppUser) => void; 
+  businessInfo?: BusinessInfo; 
+}) => {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
@@ -138,10 +146,22 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
         className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8"
       >
         <div className="text-center mb-8">
-          <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3">
-            <Truck className="text-slate-900 w-10 h-10" />
-          </div>
-          <h1 className="text-3xl font-black text-slate-900">GÁS EXPRESS</h1>
+          {businessInfo?.logoUrl ? (
+            <div className="w-20 h-20 mx-auto rounded-3xl overflow-hidden border-2 border-yellow-400 bg-white flex items-center justify-center mb-4 shadow-xl">
+              <img 
+                src={businessInfo.logoUrl} 
+                alt={businessInfo.name || 'Logo'} 
+                className="w-full h-full object-cover" 
+              />
+            </div>
+          ) : (
+            <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3 shadow-lg">
+              <Truck className="text-slate-900 w-10 h-10" />
+            </div>
+          )}
+          <h1 className="text-3xl font-black text-slate-900 uppercase">
+            {businessInfo?.name || 'GÁS EXPRESS'}
+          </h1>
           <p className="text-slate-500 font-medium">Acesse sua conta para continuar</p>
         </div>
 
@@ -210,47 +230,100 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
           <button 
             type="submit"
             disabled={loading}
-            className="w-full bg-slate-900 text-white font-black py-4 mt-2 rounded-2xl shadow-lg hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50"
+            className="w-full bg-slate-900 text-white font-black py-4 mt-2 rounded-2xl shadow-lg hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
           >
             {loading ? 'CARREGANDO...' : 'ENTRAR NO APLICATIVO'}
           </button>
+
+          <div className="pt-4 border-t border-slate-100 text-center">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Acesso Rápido para Demonstração</p>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const gestor = MOCK_USERS.find(u => u.role === 'gestor');
+                  if (gestor) onLogin(gestor);
+                }}
+                className="flex-1 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-black transition-colors cursor-pointer"
+              >
+                👤 Gestor
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const cliente = MOCK_USERS.find(u => u.role === 'cliente');
+                  if (cliente) onLogin(cliente);
+                }}
+                className="flex-1 py-2.5 px-3 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-xl text-xs font-black transition-colors cursor-pointer"
+              >
+                ⭐ Cliente (500 pts)
+              </button>
+            </div>
+          </div>
         </form>
       </motion.div>
     </div>
   );
 };
 
-const Header = ({ user, onLogout }: { user: AppUser, onLogout: () => void }) => (
-  <header className="bg-slate-900 text-white p-4 flex items-center justify-between sticky top-0 z-50 shadow-md">
-    <div className="flex items-center gap-3">
-      <div className="bg-yellow-400 p-1.5 rounded-lg">
-        <Truck className="text-slate-900 w-5 h-5" />
+const Header = ({ 
+  user, 
+  businessInfo, 
+  onLogout 
+}: { 
+  user: AppUser; 
+  businessInfo?: BusinessInfo; 
+  onLogout: () => void; 
+}) => {
+  const companyName = businessInfo?.name?.trim() || 'GÁS EXPRESS';
+  const logoUrl = businessInfo?.logoUrl;
+
+  return (
+    <header className="bg-slate-900 text-white px-4 py-3 sm:px-6 sm:py-3.5 flex items-center justify-between sticky top-0 z-50 shadow-md border-b border-slate-800/80">
+      <div className="flex items-center gap-3 min-w-0">
+        {logoUrl ? (
+          <div className="w-10 h-10 rounded-2xl overflow-hidden border-2 border-yellow-400 bg-white flex items-center justify-center shrink-0 shadow-md">
+            <img 
+              src={logoUrl} 
+              alt={companyName} 
+              className="w-full h-full object-cover" 
+            />
+          </div>
+        ) : (
+          <div className="bg-yellow-400 p-2 rounded-xl shrink-0 shadow-sm">
+            <Truck className="text-slate-900 w-5 h-5" />
+          </div>
+        )}
+        <div className="min-w-0">
+          <h2 className="text-sm sm:text-base font-black leading-tight uppercase tracking-tight truncate max-w-[180px] sm:max-w-xs md:max-w-md">
+            {companyName}
+          </h2>
+          <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-wider">
+            {user.role}
+          </p>
+        </div>
       </div>
-      <div>
-        <h2 className="text-sm font-black leading-none">GÁS EXPRESS</h2>
-        <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-tighter">{user.role}</p>
+      <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+        <div className="text-right hidden sm:block">
+          <p className="text-xs font-bold leading-none text-slate-200">{user.name}</p>
+        </div>
+        <button 
+          type="button"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onLogout();
+          }}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-red-600 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold border border-slate-700 active:scale-95 shadow-sm cursor-pointer"
+          title="Sair da Conta"
+        >
+          <LogOut className="w-3.5 h-3.5 text-red-400" />
+          <span>Sair</span>
+        </button>
       </div>
-    </div>
-    <div className="flex items-center gap-4">
-      <div className="text-right hidden sm:block">
-        <p className="text-xs font-bold leading-none">{user.name}</p>
-      </div>
-      <button 
-        type="button"
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onLogout();
-        }}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-red-600 rounded-xl text-slate-300 hover:text-white transition-all text-xs font-bold border border-slate-700 active:scale-95 shadow-sm cursor-pointer"
-        title="Sair da Conta"
-      >
-        <LogOut className="w-3.5 h-3.5 text-red-400" />
-        <span>Sair</span>
-      </button>
-    </div>
-  </header>
-);
+    </header>
+  );
+};
 
 // --- Main App ---
 
@@ -500,13 +573,22 @@ export default function App() {
     // 1. Desconecta o estado React imediatamente para voltar à tela de login sem travar
     setCurrentUser(null);
 
-    // 2. Limpa todos os tokens de autenticação do localStorage e sessionStorage
+    // 2. Limpa tokens de autenticação do usuário, mantendo configurações institucionais salvas
     try {
+      const PRESERVED_SETTINGS_KEYS = [
+        'gas_app_business_settings',
+        'gas_app_rewards',
+        'gas_app_benefits_config',
+        'gas_app_coverage_areas'
+      ];
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && (key.startsWith('sb-') || key.includes('auth') || key.includes('supabase') || key.startsWith('gas_'))) {
-          keysToRemove.push(key);
+        if (key) {
+          if (PRESERVED_SETTINGS_KEYS.includes(key)) continue;
+          if (key.startsWith('sb-') || key.includes('auth') || key.includes('supabase') || key.startsWith('gas_')) {
+            keysToRemove.push(key);
+          }
         }
       }
       keysToRemove.forEach(k => localStorage.removeItem(k));
@@ -749,10 +831,16 @@ export default function App() {
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-4">
-        <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center rotate-3 animate-pulse">
-          <Truck className="text-slate-900 w-10 h-10" />
-        </div>
-        <p className="font-black text-xl tracking-widest">GÁS EXPRESS</p>
+        {businessInfo?.logoUrl ? (
+          <div className="w-16 h-16 rounded-2xl overflow-hidden border-2 border-yellow-400 bg-white flex items-center justify-center shadow-lg animate-pulse">
+            <img src={businessInfo.logoUrl} alt="Logo" className="w-full h-full object-cover" />
+          </div>
+        ) : (
+          <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center rotate-3 animate-pulse">
+            <Truck className="text-slate-900 w-10 h-10" />
+          </div>
+        )}
+        <p className="font-black text-xl tracking-widest uppercase">{businessInfo?.name || 'GÁS EXPRESS'}</p>
         <p className="text-slate-400 text-sm font-medium animate-pulse">Verificando sessão...</p>
       </div>
     );
@@ -760,12 +848,12 @@ export default function App() {
 
 
   if (!currentUser) {
-    return <LoginView onLogin={(user) => setCurrentUser(user)} onRegister={(user) => setCurrentUser(user)} />;
+    return <LoginView onLogin={(user) => setCurrentUser(user)} onRegister={(user) => setCurrentUser(user)} businessInfo={businessInfo} />;
   }
 
   return (
     <div className="font-sans text-slate-900 min-h-screen flex flex-col">
-      <Header user={currentUser} onLogout={handleLogout} />
+      <Header user={currentUser} businessInfo={businessInfo} onLogout={handleLogout} />
       
       <main className="flex-1 overflow-auto">
         <AnimatePresence mode="wait">
@@ -838,6 +926,7 @@ export default function App() {
                 onUpdateUser={handleUpdateUser}
                 expenses={expenses}
                 allCustomers={allUsers.filter(u => u.role === 'cliente')}
+                businessInfo={businessInfo}
               />
             </motion.div>
           )}
