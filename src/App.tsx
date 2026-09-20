@@ -578,10 +578,14 @@ export default function App() {
       const earnedPoints = Math.floor(updatedOrder.total * multiplier);
 
       // 1. Creditar pontos na conta do cliente da compra
-      const customer = allUsers.find(u => u.id === updatedOrder.customerId);
+      const cleanOrderPhone = (updatedOrder.phone || '').replace(/\D/g, '');
+      const customer = allUsers.find(u => 
+        u.id === updatedOrder.customerId || 
+        (cleanOrderPhone && (u.phone || '').replace(/\D/g, '') === cleanOrderPhone)
+      );
       if (customer) {
         const historyItem: PointHistoryItem = {
-          id: Math.random().toString(36).substr(2, 9),
+          id: `order-${updatedOrder.id}`,
           userId: customer.id,
           type: 'earned_order',
           points: earnedPoints,

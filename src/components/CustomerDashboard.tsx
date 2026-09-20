@@ -38,6 +38,7 @@ import L from 'leaflet';
 import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod } from '../types';
 import { PRODUCTS } from '../constants';
 import { businessService, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
+import { userService } from '../services/userService';
 
 const houseIcon = L.divIcon({ html: '<div style="font-size:28px">🏠</div>', className: '', iconAnchor: [14,28] });
 const motoIcon  = L.divIcon({ html: '<div style="font-size:28px">🛵</div>', className: '', iconAnchor: [14,28] });
@@ -464,6 +465,70 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
   }, [user.referralCode, userReferralCode]);
 
+  // ─── IDENTIFICAÇÃO E RECONCILIAÇÃO AUTOMÁTICA DE PONTOS ──────────────────
+  const cleanUserPhone = useMemo(() => (user.phone || '').replace(/\D/g, ''), [user.phone]);
+  const isUserOrder = useCallback((o: Order) => (
+    o.customerId === user.id || 
+    (cleanUserPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanUserPhone)
+  ), [user.id, cleanUserPhone]);
+
+  const customerOrders = useMemo(() => orders.filter(isUserOrder), [orders, isUserOrder]);
+
+  const completedOrders = useMemo(() => {
+    return customerOrders.filter(o => o.status === 'Concluído');
+  }, [customerOrders]);
+
+  const earnedFromOrders = useMemo(() => {
+    const multiplier = benefitsConfig?.pointsPerCurrency ?? 10;
+    return completedOrders.reduce((sum, o) => sum + Math.floor(o.total * multiplier), 0);
+  }, [completedOrders, benefitsConfig]);
+
+  const earnedFromReferrals = useMemo(() => {
+    return referrals
+      .filter(r => r.referrerId === user.id && (r.status === 'Validado' || r.status === 'Confirmado'))
+      .reduce((sum, r) => sum + (r.pointsAwarded || benefitsConfig?.referralPointsAwarded || 100), 0);
+  }, [referrals, user.id, benefitsConfig]);
+
+  const cachedHistory = useMemo(() => {
+    const fromUser = user.pointHistory || [];
+    const fromStorage = userService.getPointHistory(user.id);
+    const map = new Map<string, PointHistoryItem>();
+    fromStorage.forEach(item => map.set(item.id, item));
+    fromUser.forEach(item => map.set(item.id, item));
+    return Array.from(map.values());
+  }, [user.pointHistory, user.id]);
+
+  const redemptionsList = useMemo(() => {
+    return cachedHistory.filter(i => i.type === 'redeemed_reward' || i.points < 0);
+  }, [cachedHistory]);
+
+  const totalSpentPoints = useMemo(() => {
+    return redemptionsList.reduce((sum, i) => sum + Math.abs(i.points), 0);
+  }, [redemptionsList]);
+
+  const totalEarnedPoints = useMemo(() => {
+    return earnedFromOrders + earnedFromReferrals;
+  }, [earnedFromOrders, earnedFromReferrals]);
+
+  const reconciledBalance = useMemo(() => {
+    const calculated = Math.max(0, totalEarnedPoints - totalSpentPoints);
+    return Math.max(calculated, user.points || 0);
+  }, [totalEarnedPoints, totalSpentPoints, user.points]);
+
+  // Se o saldo no banco/perfil estiver desatualizado em relação às compras concluídas, auto-sincroniza
+  useEffect(() => {
+    const calculated = Math.max(0, totalEarnedPoints - totalSpentPoints);
+    if (calculated > (user.points || 0)) {
+      console.log(`[Pontos] Auto-reconciliando pontos do usuário: de ${user.points || 0} para ${calculated}`);
+      const updatedUser: AppUser = {
+        ...user,
+        points: calculated,
+        pointHistory: cachedHistory
+      };
+      onUpdateUser(updatedUser);
+    }
+  }, [totalEarnedPoints, totalSpentPoints, user.points, user.id]);
+
   useEffect(() => {
     if (!selectedAddress && user.addresses && user.addresses.length > 0) {
       setSelectedAddress(user.addresses[0]);
@@ -559,13 +624,13 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   ]);
 
   const handleExecuteRewardRedemption = (reward: Reward) => {
-    if ((user.points || 0) < reward.pointsCost) {
+    if (reconciledBalance < reward.pointsCost) {
       alert("Pontos insuficientes para este resgate!");
       return;
     }
 
     const historyItem: PointHistoryItem = {
-      id: Math.random().toString(36).substr(2, 9),
+      id: 'redeem-' + Math.random().toString(36).substr(2, 9),
       userId: user.id,
       type: 'redeemed_reward',
       points: -reward.pointsCost,
@@ -573,12 +638,33 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       createdAt: new Date().toISOString()
     };
 
+    const newPoints = Math.max(0, reconciledBalance - reward.pointsCost);
+    const updatedHistory = [historyItem, ...cachedHistory];
+
+    // Salva no cache local do usuário
+    userService.savePointHistory(user.id, updatedHistory);
+
     const updatedUser = { 
       ...user, 
-      points: (user.points || 0) - reward.pointsCost,
-      pointHistory: [historyItem, ...(user.pointHistory || [])]
+      points: newPoints,
+      pointHistory: updatedHistory
     };
     onUpdateUser(updatedUser);
+
+    if (reward.type === 'discount' && (reward.value || 15)) {
+      const discountVal = reward.value || 15;
+      const redeemedCoupon: Coupon = {
+        id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
+        code: `RESGATE${discountVal}`,
+        type: 'fixed',
+        value: discountVal,
+        usageCount: 0,
+        isActive: true
+      };
+      setAppliedCoupon(redeemedCoupon);
+      showToast(`🎁 Recompensa aplicada! Cupom ${redeemedCoupon.code} de R$ ${discountVal},00 ativado no seu carrinho.`);
+    }
+
     setRewardConfirmation({ reward, stage: 'success' });
   };
 
@@ -783,14 +869,6 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
   };
 
-  const cleanUserPhone = (user.phone || '').replace(/\D/g, '');
-  const isUserOrder = (o: Order) => (
-    o.customerId === user.id || 
-    (cleanUserPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanUserPhone)
-  );
-
-  const customerOrders = orders.filter(isUserOrder);
-
   const cartSubtotal = Object.entries(cart).reduce((acc, [id, qty]) => {
     const product = PRODUCTS.find(p => p.id === id);
     return acc + (product?.price || 0) * (qty as number);
@@ -936,27 +1014,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   };
 
   const handleExchangePoints = (reward: Reward) => {
-    if ((user.points || 0) < reward.pointsCost) {
-      alert("Pontos insuficientes!");
-      return;
-    }
-
-    const historyItem: PointHistoryItem = {
-      id: Math.random().toString(36).substr(2, 9),
-      userId: user.id,
-      type: 'redeemed_reward',
-      points: -reward.pointsCost,
-      description: `Resgate: ${reward.title}`,
-      createdAt: new Date().toISOString()
-    };
-
-    const updatedUser = { 
-      ...user, 
-      points: (user.points || 0) - reward.pointsCost,
-      pointHistory: [historyItem, ...(user.pointHistory || [])]
-    };
-    onUpdateUser(updatedUser);
-    alert(`Recompensa "${reward.title}" resgatada com sucesso!`);
+    handleExecuteRewardRedemption(reward);
   };
 
   const updateCart = (id: string, delta: number) => {
@@ -2055,7 +2113,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     <div>
                       <p className="text-xs font-bold opacity-60 uppercase tracking-widest mb-1">Saldo Atual</p>
                       <div className="flex items-baseline gap-2">
-                        <span className="text-4xl font-black">{user.points || 0}</span>
+                        <span className="text-4xl font-black">{reconciledBalance.toLocaleString('pt-BR')}</span>
                         <span className="text-yellow-400 font-bold">pontos</span>
                       </div>
                     </div>
@@ -2076,7 +2134,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     {rewards.filter(r => r.isActive !== false).map(reward => {
-                      const userPoints = user.points || 0;
+                      const userPoints = reconciledBalance;
                       const progress = Math.min(100, (userPoints / reward.pointsCost) * 100);
                       const canRedeem = userPoints >= reward.pointsCost;
 
@@ -3290,25 +3348,23 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       {/* Modal de Extrato e Histórico de Pontos */}
       <AnimatePresence>
         {showPointsHistoryModal && (() => {
-          const completedOrdersTransactions: PointHistoryItem[] = orders
-            .filter(o => isUserOrder(o) && o.status === 'Concluído')
-            .map(o => ({
-              id: `order-${o.id}`,
-              userId: user.id,
-              type: 'earned_order',
-              points: Math.floor(o.total * 10),
-              description: `Compra concluída (Pedido #${o.id})`,
-              orderId: o.id,
-              createdAt: o.createdAt
-            }));
+          const completedOrdersTransactions: PointHistoryItem[] = completedOrders.map(o => ({
+            id: `order-${o.id}`,
+            userId: user.id,
+            type: 'earned_order',
+            points: Math.floor(o.total * (benefitsConfig?.pointsPerCurrency ?? 10)),
+            description: `Compra concluída (Pedido #${o.id})`,
+            orderId: o.id,
+            createdAt: o.createdAt
+          }));
 
           const referralTransactions: PointHistoryItem[] = referrals
-            .filter(r => r.referrerId === user.id && r.status === 'Validado')
+            .filter(r => r.referrerId === user.id && (r.status === 'Validado' || r.status === 'Confirmado'))
             .map(r => ({
               id: `ref-${r.id}`,
               userId: user.id,
               type: 'referral_bonus',
-              points: r.pointsAwarded || 100,
+              points: r.pointsAwarded || benefitsConfig?.referralPointsAwarded || 100,
               description: `Bônus por indicar ${r.refereeName}`,
               orderId: r.orderId,
               createdAt: r.validatedAt || r.createdAt
@@ -3316,7 +3372,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
           const allItemsMap = new Map<string, PointHistoryItem>();
           
-          (user.pointHistory || []).forEach(item => {
+          cachedHistory.forEach(item => {
             allItemsMap.set(item.id, item);
           });
           completedOrdersTransactions.forEach(item => {
@@ -3332,7 +3388,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
           const totalEarned = sortedItems.filter(i => i.points > 0).reduce((acc, i) => acc + i.points, 0);
           const totalSpent = sortedItems.filter(i => i.points < 0).reduce((acc, i) => acc + Math.abs(i.points), 0);
-          const currentBalance = user.points || 0;
+          const currentBalance = reconciledBalance;
           const displayAcumulado = Math.max(totalEarned, currentBalance + totalSpent);
 
           return (
@@ -3513,11 +3569,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <div className="bg-amber-50/70 border border-amber-200/60 p-3.5 rounded-2xl flex items-center justify-between text-xs">
                   <div>
                     <span className="text-[10px] text-amber-800/80 font-bold block uppercase">Seu Saldo Atual</span>
-                    <span className="font-black text-amber-950 text-sm">{(user.points || 0)} pontos</span>
+                    <span className="font-black text-amber-950 text-sm">{reconciledBalance.toLocaleString('pt-BR')} pontos</span>
                   </div>
-                  {(user.points || 0) < selectedRewardDetails.pointsCost ? (
+                  {reconciledBalance < selectedRewardDetails.pointsCost ? (
                     <span className="text-[11px] font-bold text-red-600 bg-red-100/80 px-2.5 py-1 rounded-full">
-                      Faltam {selectedRewardDetails.pointsCost - (user.points || 0)} pts
+                      Faltam {selectedRewardDetails.pointsCost - reconciledBalance} pts
                     </span>
                   ) : (
                     <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full flex items-center gap-1">
@@ -3530,25 +3586,25 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
               {/* Ações */}
               <div className="mt-4 pt-3 border-t border-slate-100 space-y-2 flex-shrink-0">
                 <button
-                  disabled={(user.points || 0) < selectedRewardDetails.pointsCost}
+                  disabled={reconciledBalance < selectedRewardDetails.pointsCost}
                   onClick={() => {
                     const rewardToRedeem = selectedRewardDetails;
                     setSelectedRewardDetails(null);
                     setRewardConfirmation({ reward: rewardToRedeem, stage: 'confirm' });
                   }}
                   className={`w-full py-3.5 rounded-2xl font-black text-xs transition-all flex items-center justify-center gap-2 ${
-                    (user.points || 0) >= selectedRewardDetails.pointsCost
+                    reconciledBalance >= selectedRewardDetails.pointsCost
                       ? 'bg-slate-900 hover:bg-slate-800 text-white shadow-lg shadow-slate-900/15 active:scale-[0.99]'
                       : 'bg-slate-100 text-slate-400 cursor-not-allowed'
                   }`}
                 >
-                  {(user.points || 0) >= selectedRewardDetails.pointsCost ? (
+                  {reconciledBalance >= selectedRewardDetails.pointsCost ? (
                     <>
                       <Gift className="w-4 h-4 text-yellow-400" />
                       RESGATAR POR {selectedRewardDetails.pointsCost} PONTOS
                     </>
                   ) : (
-                    `PONTOS INSUFICIENTES (FALTAM ${selectedRewardDetails.pointsCost - (user.points || 0)})`
+                    `PONTOS INSUFICIENTES (FALTAM ${selectedRewardDetails.pointsCost - reconciledBalance})`
                   )}
                 </button>
                 <button
@@ -3597,7 +3653,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-100 mb-5 text-left text-xs space-y-1.5">
                     <div className="flex justify-between">
                       <span className="text-slate-500 font-bold">Saldo atual:</span>
-                      <span className="font-black text-slate-900">{user.points || 0} pts</span>
+                      <span className="font-black text-slate-900">{reconciledBalance.toLocaleString('pt-BR')} pts</span>
                     </div>
                     <div className="flex justify-between text-red-500">
                       <span className="font-bold">Custo do resgate:</span>
@@ -3605,7 +3661,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     </div>
                     <div className="flex justify-between pt-1.5 border-t border-slate-200">
                       <span className="text-slate-700 font-bold">Saldo após resgate:</span>
-                      <span className="font-black text-emerald-600">{(user.points || 0) - rewardConfirmation.reward.pointsCost} pts</span>
+                      <span className="font-black text-emerald-600">{(reconciledBalance - rewardConfirmation.reward.pointsCost).toLocaleString('pt-BR')} pts</span>
                     </div>
                   </div>
 

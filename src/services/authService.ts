@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { AppUser, UserRole } from '../types';
+import { userService } from './userService';
 
 export const authService = {
   async getCurrentUser(): Promise<AppUser | null> {
@@ -206,7 +207,8 @@ export const authService = {
       phone: userMeta?.phone || '',
       points: 0,
       addresses: [],
-      allowedTabs: []
+      allowedTabs: [],
+      pointHistory: userService.getPointHistory(userId)
     };
 
     try {
@@ -239,10 +241,11 @@ export const authService = {
           role: profile.role as UserRole,
           name: finalName,
           phone: profile.phone,
-          points: profile.points,
+          points: profile.points || 0,
           addresses: profile.addresses || [],
           location: profile.location,
           allowedTabs: (profile as any).allowed_tabs || profile.allowedTabs || [],
+          pointHistory: userService.getPointHistory(profile.id)
         };
       }
 
