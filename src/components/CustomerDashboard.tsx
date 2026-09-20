@@ -25,13 +25,18 @@ import {
   CreditCard,
   Loader2,
   Check,
-  AlertCircle
+  AlertCircle,
+  Calendar,
+  Zap,
+  Sun,
+  Sunset
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
-import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig } from '../types';
+import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo } from '../types';
 import { PRODUCTS } from '../constants';
+import { businessService } from '../services/businessService';
 
 const houseIcon = L.divIcon({ html: '<div style="font-size:28px">🏠</div>', className: '', iconAnchor: [14,28] });
 const motoIcon  = L.divIcon({ html: '<div style="font-size:28px">🛵</div>', className: '', iconAnchor: [14,28] });
@@ -54,6 +59,7 @@ interface CustomerDashboardProps {
   onUpdateOrder?: (order: Order) => void;
   benefitsConfig?: BenefitsConfig;
   onLogout?: () => void;
+  businessInfo?: BusinessInfo;
 }
 
 // HistoryCard — card expansível de histórico de pedidos
@@ -79,7 +85,14 @@ const HistoryCard: React.FC<{
       <button onClick={() => setExpanded(e => !e)} className="w-full p-4 text-left">
         <div className="flex justify-between items-start mb-1">
           <span className="text-xs font-black text-slate-400">#{order.id}</span>
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${statusColor}`}>{order.status}</span>
+          <div className="flex items-center gap-1.5">
+            {order.isScheduled && (
+              <span className="text-[9px] font-bold px-2 py-0.5 rounded uppercase bg-purple-100 text-purple-800 border border-purple-200">
+                📅 {order.scheduledPeriod === 'manha' ? 'Manhã (08h-13h)' : 'Tarde (13h-19h)'}
+              </span>
+            )}
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase ${statusColor}`}>{order.status}</span>
+          </div>
         </div>
         <div className="flex justify-between items-center">
           <div>
@@ -230,7 +243,7 @@ const HistoryCard: React.FC<{
 };
 
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ 
-  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout
+  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout, businessInfo
 }) => {
   const [activeTab, setActiveTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>(initialTab || 'home');
   const [step, setStep] = useState<'landing' | 'onboarding' | 'address' | 'catalog' | 'checkout' | 'confirmation' | 'processing' | 'status'>('landing');
@@ -249,6 +262,26 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const [deliveryStars, setDeliveryStars] = useState(0);
   const [ratingSuccessModal, setRatingSuccessModal] = useState<{ order: Order; serviceRating: number; deliveryRating: number } | null>(null);
   const [referralTab, setReferralTab] = useState<'pontos' | 'indicacoes'>('pontos');
+
+  // Novos estados para modalidade de pedido: imediato vs agendado
+  const [deliveryType, setDeliveryType] = useState<'immediate' | 'scheduled'>('immediate');
+  const [scheduledPeriod, setScheduledPeriod] = useState<'manha' | 'tarde'>('manha');
+
+  // Status da loja baseado em horários ou override manual do gestor
+  const storeStatus = useMemo(() => {
+    return businessService.isStoreCurrentlyOpen(businessInfo);
+  }, [businessInfo]);
+
+  const scheduledDateInfo = useMemo(() => {
+    return businessService.getNextDayFormatted();
+  }, []);
+
+  // Se a loja estiver fechada para pedidos imediatos, seleciona agendamento por padrão
+  useEffect(() => {
+    if (!storeStatus.isOpen) {
+      setDeliveryType('scheduled');
+    }
+  }, [storeStatus.isOpen]);
 
   // Novos estados para extrato de pontos e modais de indicação
   const [showPointsHistoryModal, setShowPointsHistoryModal] = useState(false);
@@ -286,7 +319,16 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const [cepInput, setCepInput] = useState('');
   const [streetSearch, setStreetSearch] = useState('');
   const [streetSuggestions, setStreetSuggestions] = useState<any[]>([]);
-  const [nameInput, setNameInput] = useState('');
+  const [nameInput, setNameInput] = useState(() => {
+    if (user.name && user.name !== 'Cliente' && user.name !== 'Usuário' && user.name.trim() !== '') {
+      return user.name;
+    }
+    try {
+      const local = localStorage.getItem('gas_app_customer_name');
+      if (local && local.trim()) return local.trim();
+    } catch {}
+    return '';
+  });
   const [isSearching, setIsSearching] = useState(false);
   const [pendingAddress, setPendingAddress] = useState<Partial<Address> | null>(null);
   const [addressNumber, setAddressNumber] = useState('');
@@ -453,8 +495,27 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
   };
 
-  // Initial check for name
+  // Initial check for name - roda estritamente uma única vez e consulta cache local
+  const hasCheckedOnboarding = React.useRef(false);
   useEffect(() => {
+    if (hasCheckedOnboarding.current) return;
+
+    let savedName = '';
+    let isCompletedLocal = false;
+    try {
+      savedName = localStorage.getItem('gas_app_customer_name') || '';
+      isCompletedLocal = localStorage.getItem('gas_app_onboarding_completed') === 'true';
+    } catch {}
+
+    // Se já tiver completado ou tiver nome salvo no cache local, nunca pede de novo
+    if (isCompletedLocal || (savedName && savedName.trim() && savedName !== 'Cliente' && savedName !== 'Usuário')) {
+      hasCheckedOnboarding.current = true;
+      if (savedName && (!user.name || user.name === 'Cliente' || user.name === 'Usuário')) {
+        onUpdateUser({ ...user, name: savedName });
+      }
+      return;
+    }
+
     const isDefaultName = !user.name || user.name === 'Cliente' || user.name === 'Usuário' || user.name.trim() === '';
     const cleanPhone = (user.phone || '').replace(/\D/g, '');
     const hasHistory = orders.some(o => o.customerId === user.id || (cleanPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanPhone)) || (user.addresses && user.addresses.length > 0);
@@ -462,7 +523,8 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     if (isDefaultName && !hasHistory) {
       setStep('onboarding');
     }
-  }, [user.name, orders, user.addresses, user.id]);
+    hasCheckedOnboarding.current = true;
+  }, []);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -631,6 +693,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     setCouponError(null);
     const code = couponCode.toUpperCase();
     
+    // Função auxiliar para normalizar endereços para comparação e evitar fraudes (várias contas no mesmo local)
+    const formatAddressForComparison = (addr: Address | null) => {
+      if (!addr) return '';
+      return `${addr.street} ${addr.number} ${addr.complement || ''} ${addr.neighborhood} ${addr.city}`.toLowerCase().replace(/[^a-z0-9]/g, '');
+    };
+    
     // 1. Check if it's a standard coupon
     const coupon = coupons.find(c => c.code.toUpperCase() === code);
     
@@ -650,9 +718,23 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         return;
       }
 
-      if (coupon.isOneTimePerUser && user.usedCoupons?.includes(coupon.id)) {
-        setCouponError("Você já utilizou este cupom.");
-        return;
+      if (coupon.isOneTimePerUser) {
+        if (user.usedCoupons?.includes(coupon.id)) {
+          setCouponError("Você já utilizou este cupom.");
+          return;
+        }
+        
+        // Anti-fraude por endereço: garante que contas diferentes não usem cupom de uso único no mesmo endereço
+        const currentAddressStr = formatAddressForComparison(selectedAddress);
+        const usedAtAddress = orders.some(o => 
+          o.couponCode?.toUpperCase() === coupon.code.toUpperCase() && 
+          o.status !== 'Cancelado' &&
+          formatAddressForComparison(o.address) === currentAddressStr
+        );
+        if (usedAtAddress) {
+          setCouponError("Este benefício já foi utilizado neste endereço.");
+          return;
+        }
       }
       
       if (coupon.minOrderValue && cartSubtotal < coupon.minOrderValue) {
@@ -687,6 +769,19 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       if (nonCancelledOrders.length > 0) {
         setCouponError("Cupons de indicação são válidos exclusivamente no seu primeiro pedido.");
         return;
+      }
+
+      // Regra Antifraude de Endereço: Evitar criação de várias contas para o mesmo endereço físico
+      const currentAddressStr = formatAddressForComparison(selectedAddress);
+      if (currentAddressStr) {
+        const addressAlreadyUsed = orders.some(o => 
+          o.status !== 'Cancelado' && 
+          formatAddressForComparison(o.address) === currentAddressStr
+        );
+        if (addressAlreadyUsed) {
+          setCouponError("Este endereço já possui pedidos no sistema e não é elegível para bônus de indicação (primeira compra).");
+          return;
+        }
       }
 
       // Regra 2: Se já concluiu anteriormente uma primeira compra com indicação, não pode usar de novo
@@ -819,6 +914,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         }
       }
 
+      const isSched = deliveryType === 'scheduled';
+      const schedRange = scheduledPeriod === 'manha' ? '08:00 às 13:00' : '13:00 às 19:00';
+
       const newOrder: Order = {
         id: orderId,
         customerId: user.id,
@@ -835,7 +933,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         couponCode: appliedCoupon?.code,
         referralId: referrerId,
         paymentMethod: pendingPaymentMethod,
-        status: 'Pendente',
+        status: isSched ? 'Pendente' : 'Pendente',
+        isScheduled: isSched,
+        scheduledDate: isSched ? scheduledDateInfo.display : undefined,
+        scheduledPeriod: isSched ? scheduledPeriod : undefined,
+        scheduledTimeRange: isSched ? schedRange : undefined,
+        feedback: isSched ? `[Agendado para: ${scheduledDateInfo.display} - ${scheduledPeriod === 'manha' ? 'Manhã (08h às 13h)' : 'Tarde (13h às 19h)'}]` : undefined,
         createdAt: new Date().toISOString()
       };
 
@@ -895,7 +998,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 onChange={(e) => setNameInput(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && nameInput.trim()) {
-                    onUpdateUser({ ...user, name: nameInput.trim() });
+                    const validName = nameInput.trim();
+                    try {
+                      localStorage.setItem('gas_app_customer_name', validName);
+                      localStorage.setItem('gas_app_onboarding_completed', 'true');
+                    } catch {}
+                    onUpdateUser({ ...user, name: validName });
                     setStep('landing');
                   }
                 }}
@@ -903,7 +1011,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
               <button 
                 onClick={() => {
                   if (nameInput.trim()) {
-                    onUpdateUser({ ...user, name: nameInput.trim() });
+                    const validName = nameInput.trim();
+                    try {
+                      localStorage.setItem('gas_app_customer_name', validName);
+                      localStorage.setItem('gas_app_onboarding_completed', 'true');
+                    } catch {}
+                    onUpdateUser({ ...user, name: validName });
                     setStep('landing');
                   }
                 }}
@@ -1192,13 +1305,58 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
             {step === 'catalog' && (
               <div className="p-4 max-w-2xl mx-auto">
-                <div className="flex items-center justify-between mb-6">
+                <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <MapPin className="text-yellow-500 w-4 h-4" />
                     <span className="text-xs font-bold truncate max-w-[150px]">{selectedAddress?.street}</span>
                   </div>
                   <button onClick={() => setStep('address')} className="text-xs font-black text-slate-400">TROCAR</button>
                 </div>
+
+                {/* Seletor rápido de modalidade no catálogo */}
+                <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-100 mb-4 space-y-2">
+                  <div className="flex bg-slate-100 p-1 rounded-xl gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryType('immediate')}
+                      className={`flex-1 py-2 px-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                        deliveryType === 'immediate'
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      <Zap className={`w-3.5 h-3.5 ${deliveryType === 'immediate' ? 'text-yellow-500' : 'text-slate-400'}`} />
+                      <span>Pedir agora</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryType('scheduled')}
+                      className={`flex-1 py-2 px-2.5 rounded-lg text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                        deliveryType === 'scheduled'
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-500'
+                      }`}
+                    >
+                      <Calendar className={`w-3.5 h-3.5 ${deliveryType === 'scheduled' ? 'text-purple-600' : 'text-slate-400'}`} />
+                      <span>Agendar</span>
+                    </button>
+                  </div>
+
+                  {deliveryType === 'scheduled' && (
+                    <div className="flex items-center justify-between text-[11px] font-bold text-purple-700 bg-purple-50 px-2.5 py-1.5 rounded-lg">
+                      <span>📅 {scheduledDateInfo.display}</span>
+                      <span>{scheduledPeriod === 'manha' ? 'Manhã (08h-13h)' : 'Tarde (13h-19h)'}</span>
+                    </div>
+                  )}
+
+                  {deliveryType === 'immediate' && !storeStatus.isOpen && (
+                    <div className="flex items-center justify-between text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-lg">
+                      <span>⚠️ Entregas imediatas fechadas</span>
+                      <button onClick={() => setDeliveryType('scheduled')} className="underline text-amber-900">Agendar pedido</button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="space-y-4">
                   {PRODUCTS.map(p => (
                     <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 border border-slate-100">
@@ -1253,6 +1411,141 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   <p className="font-bold text-slate-900">{selectedAddress?.street}, {selectedAddress?.number}</p>
                   <p className="text-xs text-slate-500">{selectedAddress?.neighborhood}, {selectedAddress?.city}</p>
                   {selectedAddress?.complement && <p className="text-xs text-slate-400 mt-1">Compl: {selectedAddress.complement}</p>}
+                </div>
+
+                {/* 3.1: Modalidade de Pedido (Pedir agora vs Agendar pedido) */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Modalidade da Entrega</p>
+                    {deliveryType === 'scheduled' ? (
+                      <span className="text-[11px] font-bold text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-200">
+                        {scheduledDateInfo.display}
+                      </span>
+                    ) : (
+                      <span className="text-[11px] font-bold text-green-700 bg-green-50 px-2.5 py-0.5 rounded-full border border-green-200">
+                        Entrega Rápida
+                      </span>
+                    )}
+                  </div>
+
+                  {/* 2 pequenas abas juntas em um mesmo div */}
+                  <div className="flex bg-slate-100 p-1.5 rounded-2xl gap-1 border border-slate-200/60">
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryType('immediate')}
+                      className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                        deliveryType === 'immediate'
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <Zap className={`w-3.5 h-3.5 ${deliveryType === 'immediate' ? 'text-yellow-500' : 'text-slate-400'}`} />
+                      <span>Pedir agora</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryType('scheduled')}
+                      className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 ${
+                        deliveryType === 'scheduled'
+                          ? 'bg-white text-slate-900 shadow-sm'
+                          : 'text-slate-500 hover:text-slate-700'
+                      }`}
+                    >
+                      <Calendar className={`w-3.5 h-3.5 ${deliveryType === 'scheduled' ? 'text-purple-600' : 'text-slate-400'}`} />
+                      <span>Agendar pedido</span>
+                    </button>
+                  </div>
+
+                  {/* No primeiro item: seguir normal */}
+                  {deliveryType === 'immediate' && (
+                    <div>
+                      {!storeStatus.isOpen ? (
+                        <div className="bg-amber-50 border border-amber-200/80 p-3.5 rounded-2xl space-y-2">
+                          <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                            <Clock className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                            <span>Entregas imediatas encerradas no momento</span>
+                          </div>
+                          <p className="text-[11px] text-amber-700 leading-relaxed">
+                            {storeStatus.reason}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setDeliveryType('scheduled')}
+                            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black py-2.5 rounded-xl text-xs transition-colors shadow-sm flex items-center justify-center gap-1.5 mt-1"
+                          >
+                            <Calendar className="w-3.5 h-3.5" /> Clique para Agendar para Amanhã
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2.5 bg-green-50 p-3 rounded-2xl border border-green-100 text-xs text-green-800">
+                          <Clock className="w-4 h-4 text-green-600 flex-shrink-0" />
+                          <div>
+                            <span className="font-bold block">Entrega imediata em andamento</span>
+                            <span className="text-[11px] text-green-600">Previsão estimada: 30 a 45 minutos</span>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* No segundo item: abrir um novo div com possibilidade de pedir de manhã ou tarde */}
+                  {deliveryType === 'scheduled' && (
+                    <div className="bg-purple-50/50 border border-purple-200/70 p-4 rounded-2xl space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-purple-950 flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                          Agendamento para {scheduledDateInfo.display}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2">
+                        {/* Opção Manhã: 08:00 às 13:00 */}
+                        <div
+                          onClick={() => setScheduledPeriod('manha')}
+                          className={`flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                            scheduledPeriod === 'manha'
+                              ? 'bg-white border-purple-500 ring-2 ring-purple-400 shadow-sm'
+                              : 'bg-white/80 border-slate-200 hover:bg-white'
+                          }`}
+                        >
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
+                            scheduledPeriod === 'manha' ? 'border-purple-600 bg-purple-600' : 'border-slate-300 bg-white'
+                          }`}>
+                            {scheduledPeriod === 'manha' && <div className="w-2 h-2 bg-white rounded-full" />}
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-black text-xs text-slate-900 flex items-center gap-1.5">
+                              <Sun className="w-3.5 h-3.5 text-amber-500" /> Período da Manhã
+                            </p>
+                            <p className="text-[11px] text-slate-500 font-medium">Entrega entre 08:00 e 13:00</p>
+                          </div>
+                        </div>
+
+                        {/* Opção Tarde: 13:00 às 19:00 */}
+                        <div
+                          onClick={() => setScheduledPeriod('tarde')}
+                          className={`flex items-center gap-3 p-3.5 rounded-2xl border cursor-pointer transition-all ${
+                            scheduledPeriod === 'tarde'
+                              ? 'bg-white border-purple-500 ring-2 ring-purple-400 shadow-sm'
+                              : 'bg-white/80 border-slate-200 hover:bg-white'
+                          }`}
+                        >
+                          <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors flex-shrink-0 ${
+                            scheduledPeriod === 'tarde' ? 'border-purple-600 bg-purple-600' : 'border-slate-300 bg-white'
+                          }`}>
+                            {scheduledPeriod === 'tarde' && <div className="w-2 h-2 bg-white rounded-full" />}
+                          </div>
+                          <div className="flex-1">
+                            <p className="font-black text-xs text-slate-900 flex items-center gap-1.5">
+                              <Sunset className="w-3.5 h-3.5 text-orange-500" /> Período da Tarde
+                            </p>
+                            <p className="text-[11px] text-slate-500 font-medium">Entrega entre 13:00 e 19:00</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
@@ -2166,7 +2459,16 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       type="text" 
                       className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all font-bold"
                       value={user.name}
-                      onChange={(e) => onUpdateUser({ ...user, name: e.target.value })}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val && val.trim()) {
+                          try {
+                            localStorage.setItem('gas_app_customer_name', val.trim());
+                            localStorage.setItem('gas_app_onboarding_completed', 'true');
+                          } catch {}
+                        }
+                        onUpdateUser({ ...user, name: val });
+                      }}
                     />
                   </div>
                   <div>

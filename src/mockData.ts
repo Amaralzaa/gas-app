@@ -6,85 +6,20 @@ export const MOCK_USERS: AppUser[] = [
     name: 'Rafael Amaral (Gestor)',
     email: 'rafael.rr.amaral@gmail.com',
     role: 'gestor',
-    phone: '21999999999',
+    phone: '',
     points: 0,
     addresses: [],
     allowedTabs: ['dashboard', 'orders', 'map', 'coverage', 'benefits', 'predictions', 'collaborators']
   },
   {
-    id: 'user-entregador-1',
-    name: 'Carlos Motoboy',
+    id: 'ce191c4f-f686-4c1e-bc3f-0caf94a7426b',
+    name: 'Antônio',
     email: 'entregador@portogas.com',
     role: 'entregador',
-    phone: '21988888888',
+    phone: '',
     points: 0,
     addresses: [],
-    location: { lat: -22.903, lng: -43.112 },
-    allowedTabs: []
-  },
-  {
-    id: 'user-entregador-2',
-    name: 'João Entregas',
-    email: 'joao@portogas.com',
-    role: 'entregador',
-    phone: '21977777777',
-    points: 0,
-    addresses: [],
-    location: { lat: -22.896, lng: -43.105 },
-    allowedTabs: []
-  },
-  {
-    id: '35234514-ff9d-4dfa-ab32-5992f3fdb61d',
-    name: 'Rafael Amaral',
-    email: 'guest_21999546006@gasexpress.app',
-    role: 'cliente',
-    phone: '21999546006',
-    points: 14970,
-    addresses: [
-      {
-        cep: '24210560',
-        lat: -22.9010729,
-        lng: -43.1179227,
-        city: 'Niterói',
-        state: 'RJ',
-        number: '110',
-        street: 'Rua Professora Aurelia Pimentel Quaresma de Moura',
-        reference: '',
-        complement: '',
-        neighborhood: 'Ingá'
-      },
-      {
-        cep: '24220331',
-        lat: -22.9037943,
-        lng: -43.1017475,
-        city: 'Niterói',
-        state: 'RJ',
-        number: '350',
-        street: 'Rua Presidente João Pessoa',
-        reference: '',
-        complement: '',
-        neighborhood: 'Icaraí'
-      }
-    ],
-    allowedTabs: []
-  },
-  {
-    id: 'user-cliente-2',
-    name: 'Juliana Costa',
-    email: 'juliana@exemplo.com',
-    role: 'cliente',
-    phone: '21981234567',
-    points: 80,
-    addresses: [
-      {
-        cep: '24230-050',
-        street: 'Avenida Sete de Setembro',
-        number: '140',
-        neighborhood: 'Santa Rosa',
-        city: 'Niterói',
-        state: 'RJ'
-      }
-    ],
+    location: { lat: -22.9013209, lng: -43.1189942 },
     allowedTabs: []
   }
 ];
@@ -120,140 +55,10 @@ export const MOCK_COVERAGE_AREAS: CoverageArea[] = [
   }
 ];
 
-export const MOCK_ORDERS: Order[] = [
-  {
-    id: 'PED-101',
-    customerId: 'user-cliente-1',
-    customerName: 'Rafael Amaral',
-    phone: '21999546006',
-    address: {
-      cep: '24220-000',
-      street: 'Rua Coronel Moreira César',
-      number: '250',
-      complement: 'Apto 402',
-      neighborhood: 'Icaraí',
-      city: 'Niterói',
-      state: 'RJ'
-    },
-    items: [
-      { productId: 'p13', quantity: 1, priceAtTime: 115.00 },
-      { productId: 'water20', quantity: 1, priceAtTime: 18.00 }
-    ],
-    total: 133.00,
-    paymentMethod: 'Pix',
-    status: 'Em Rota',
-    deliveryPersonId: 'user-entregador-1',
-    deliveryPersonLocation: { lat: -22.903, lng: -43.112 },
-    createdAt: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-    estimatedArrival: new Date(Date.now() + 15 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'PED-102',
-    customerId: 'user-cliente-2',
-    customerName: 'Juliana Costa',
-    phone: '21981234567',
-    address: {
-      cep: '24230-050',
-      street: 'Avenida Sete de Setembro',
-      number: '140',
-      neighborhood: 'Santa Rosa',
-      city: 'Niterói',
-      state: 'RJ'
-    },
-    items: [
-      { productId: 'p13', quantity: 1, priceAtTime: 115.00 }
-    ],
-    total: 115.00,
-    paymentMethod: 'Cartão na Entrega',
-    status: 'Pendente',
-    createdAt: new Date(Date.now() - 5 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'PED-103',
-    customerId: 'user-cliente-1',
-    customerName: 'Rafael Amaral',
-    phone: '21999546006',
-    address: {
-      cep: '24220-000',
-      street: 'Rua Coronel Moreira César',
-      number: '250',
-      neighborhood: 'Icaraí',
-      city: 'Niterói',
-      state: 'RJ'
-    },
-    items: [
-      { productId: 'p13', quantity: 1, priceAtTime: 115.00 }
-    ],
-    total: 115.00,
-    paymentMethod: 'Dinheiro',
-    status: 'Concluído',
-    deliveryPersonId: 'user-entregador-1',
-    createdAt: new Date(Date.now() - 35 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'PED-104',
-    customerId: 'user-cliente-1',
-    customerName: 'Rafael Amaral',
-    phone: '21999546006',
-    address: {
-      cep: '24220-000',
-      street: 'Rua Coronel Moreira César',
-      number: '250',
-      neighborhood: 'Icaraí',
-      city: 'Niterói',
-      state: 'RJ'
-    },
-    items: [
-      { productId: 'p13', quantity: 1, priceAtTime: 115.00 }
-    ],
-    total: 115.00,
-    paymentMethod: 'Pix',
-    status: 'Concluído',
-    deliveryPersonId: 'user-entregador-1',
-    createdAt: new Date(Date.now() - 70 * 24 * 60 * 60 * 1000).toISOString()
-  },
-  {
-    id: 'PED-105',
-    customerId: 'user-cliente-2',
-    customerName: 'Juliana Costa',
-    phone: '21981234567',
-    address: {
-      cep: '24230-050',
-      street: 'Avenida Sete de Setembro',
-      number: '140',
-      neighborhood: 'Santa Rosa',
-      city: 'Niterói',
-      state: 'RJ'
-    },
-    items: [
-      { productId: 'water20', quantity: 2, priceAtTime: 18.00 }
-    ],
-    total: 36.00,
-    paymentMethod: 'Pix',
-    status: 'Concluído',
-    deliveryPersonId: 'user-entregador-2',
-    createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
-  }
-];
+export const MOCK_ORDERS: Order[] = [];
 
-export const MOCK_EXPENSES: Expense[] = [
-  {
-    id: 'exp-1',
-    description: 'Gasolina Moto 01',
-    amount: 55.00,
-    date: new Date().toISOString(),
-    category: 'Combustível',
-    userId: 'user-entregador-1'
-  },
-  {
-    id: 'exp-2',
-    description: 'Troca de Óleo Moto 02',
-    amount: 45.00,
-    date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-    category: 'Manutenção',
-    userId: 'user-entregador-2'
-  }
-];
+export const MOCK_EXPENSES: Expense[] = [];
+
 
 export const MOCK_COUPONS: Coupon[] = [
   {
@@ -312,18 +117,8 @@ export const MOCK_REWARDS: Reward[] = [
   }
 ];
 
-export const MOCK_REFERRALS: Referral[] = [
-  {
-    id: 'ref-1',
-    referrerId: 'user-cliente-1',
-    referrerName: 'Rafael Cliente',
-    refereePhone: '21998877665',
-    refereeName: 'Fernanda Rocha',
-    status: 'Validado',
-    pointsAwarded: 100,
-    createdAt: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString()
-  }
-];
+export const MOCK_REFERRALS: Referral[] = [];
+
 
 export const MOCK_BENEFITS_CONFIG: BenefitsConfig = {
   referralDiscountValue: 10,

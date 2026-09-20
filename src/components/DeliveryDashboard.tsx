@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Truck, 
   DollarSign, 
@@ -16,13 +16,15 @@ import {
   History,
   MessageSquare,
   Phone,
-  Map as MapIcon
+  Map as MapIcon,
+  Calendar
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import { AppUser, Order, Expense, Product, Address } from '../types';
 import { PRODUCTS } from '../constants';
+import { playAssignedOrderSound, unlockAudio } from '../utils/sounds';
 
 interface DeliveryDashboardProps {
   user: AppUser;
@@ -81,6 +83,54 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ user, orde
       if (watchId) navigator.geolocation.clearWatch(watchId);
     };
   }, []);
+
+  // --- Notificação sonora: pedido atribuído ao Entregador ---
+  const prevAssignedIdsRef = useRef<Set<string>>(
+    new Set(orders.filter(o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')).map(o => o.id))
+  );
+  const audioUnlockedRef = useRef(false);
+
+  // Desbloqueia áudio na primeira interação
+  useEffect(() => {
+    const unlock = () => {
+      if (!audioUnlockedRef.current) {
+        unlockAudio();
+        audioUnlockedRef.current = true;
+      }
+    };
+    window.addEventListener('click', unlock, { once: true });
+    window.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
+
+  useEffect(() => {
+    const myAssigned = orders.filter(
+      o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')
+    );
+    const newAssigned = myAssigned.filter(o => !prevAssignedIdsRef.current.has(o.id));
+
+    if (newAssigned.length > 0) {
+      playAssignedOrderSound().catch(() => {});
+
+      if ('Notification' in window && Notification.permission === 'granted') {
+        newAssigned.forEach(o => {
+          new Notification('🚚 Novo Pedido Atribuído!', {
+            body: `${o.customerName} — ${o.address.street}, ${o.address.neighborhood}`,
+            icon: '/favicon.ico',
+            tag: o.id
+          });
+        });
+      } else if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+
+    prevAssignedIdsRef.current = new Set(myAssigned.map(o => o.id));
+  }, [orders, user.id]);
+
 
   const handleForceGps = () => {
     if ('geolocation' in navigator) {
@@ -225,7 +275,14 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ user, orde
                     {o.address.reference && (
                       <p className="text-[11px] text-slate-500 ml-6 mb-1">📍 {o.address.reference}</p>
                     )}
-                    <p className="text-[11px] text-slate-500 ml-6 mb-4">{o.address.neighborhood} · {o.paymentMethod}</p>
+                    <p className="text-[11px] text-slate-500 ml-6 mb-2">{o.address.neighborhood} · {o.paymentMethod}</p>
+
+                    {o.isScheduled && (
+                      <div className="bg-purple-950/80 border border-purple-500/50 text-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold mb-3 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-purple-400" />
+                        <span>📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <a

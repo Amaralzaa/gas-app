@@ -1,11 +1,9 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const env = (import.meta as any).env || {};
+const supabaseUrl: string = env.VITE_SUPABASE_URL || 'https://rulknyshcpsqnsmsoypt.supabase.co';
+const supabaseAnonKey: string = env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_spSaz4-lfvSkx93sT3onHA_1ZD4BMUU';
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Supabase credentials missing in .env file');
-}
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

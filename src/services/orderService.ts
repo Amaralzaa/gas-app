@@ -13,29 +13,69 @@ export const orderService = {
   },
 
   async createOrder(order: Order): Promise<Order> {
-    const { data, error } = await supabase
+    const payload: any = {
+      customer_id: order.customerId,
+      customer_name: order.customerName,
+      phone: order.phone,
+      items: order.items,
+      total: order.total,
+      discount: order.discount || 0,
+      coupon_code: order.couponCode || null,
+      status: order.status,
+      payment_method: order.paymentMethod,
+      address: order.address,
+      estimated_arrival: order.estimatedArrival,
+      feedback: order.feedback || null,
+    };
+
+    if (order.isScheduled) {
+      payload.is_scheduled = true;
+      payload.scheduled_date = order.scheduledDate || null;
+      payload.scheduled_period = order.scheduledPeriod || null;
+      payload.scheduled_time_range = order.scheduledTimeRange || null;
+    }
+
+    let { data, error } = await supabase
       .from('orders')
-      .insert({
-        customer_id: order.customerId,
-        customer_name: order.customerName,
-        phone: order.phone,
-        items: order.items,
-        total: order.total,
-        discount: order.discount || 0,
-        coupon_code: order.couponCode || null,
-        status: order.status,
-        payment_method: order.paymentMethod,
-        address: order.address,
-        estimated_arrival: order.estimatedArrival,
-      })
+      .insert(payload)
       .select()
       .single();
+
+    // Fallback se as novas colunas de agendamento ainda não foram aplicadas no Supabase
+    if (error && (error.message?.includes('is_scheduled') || error.message?.includes('scheduled_date') || error.code === '42703')) {
+      console.warn('Colunas de agendamento não encontradas no Supabase. Salvando com anotação em feedback...');
+      const fallbackPayload = { ...payload };
+      delete fallbackPayload.is_scheduled;
+      delete fallbackPayload.scheduled_date;
+      delete fallbackPayload.scheduled_period;
+      delete fallbackPayload.scheduled_time_range;
+
+      const schedNote = `[Agendado para: ${order.scheduledDate || 'Amanhã'} - ${order.scheduledPeriod === 'manha' ? 'Manhã (08h às 13h)' : 'Tarde (13h às 19h)'}]`;
+      fallbackPayload.feedback = fallbackPayload.feedback ? `${fallbackPayload.feedback} | ${schedNote}` : schedNote;
+
+      const retryRes = await supabase
+        .from('orders')
+        .insert(fallbackPayload)
+        .select()
+        .single();
+
+      data = retryRes.data;
+      error = retryRes.error;
+    }
 
     if (error) {
       console.error('Error creating order:', error);
       throw error;
     }
-    return this.mapOrder(data);
+    const mapped = this.mapOrder(data);
+    // Preserva os dados de agendamento originais caso tenha caído no fallback
+    if (order.isScheduled) {
+      mapped.isScheduled = true;
+      mapped.scheduledDate = order.scheduledDate;
+      mapped.scheduledPeriod = order.scheduledPeriod;
+      mapped.scheduledTimeRange = order.scheduledTimeRange;
+    }
+    return mapped;
   },
 
   async updateOrder(orderId: string, updates: Partial<Order>): Promise<void> {
@@ -91,6 +131,21 @@ export const orderService = {
       ? dbOrder.feedback.replace('[Cancelamento]: ', '')
       : undefined;
 
+    const isSchedFromNote = dbOrder.feedback?.includes('[Agendado para:');
+    let schedDate = dbOrder.scheduled_date;
+    let schedPeriod = dbOrder.scheduled_period;
+    let schedRange = dbOrder.scheduled_time_range;
+
+    if (!schedDate && isSchedFromNote) {
+      if (dbOrder.feedback.includes('Manhã')) {
+        schedPeriod = 'manha';
+        schedRange = '08:00 às 13:00';
+      } else if (dbOrder.feedback.includes('Tarde')) {
+        schedPeriod = 'tarde';
+        schedRange = '13:00 às 19:00';
+      }
+    }
+
     return {
       id: dbOrder.id,
       customerId: dbOrder.customer_id,
@@ -112,6 +167,10 @@ export const orderService = {
       feedback: dbOrder.feedback,
       cancellationReason: dbOrder.cancellation_reason || feedbackReason,
       cancelledAt: dbOrder.cancelled_at,
+      isScheduled: dbOrder.is_scheduled ?? (isSchedFromNote || false),
+      scheduledDate: schedDate,
+      scheduledPeriod: schedPeriod,
+      scheduledTimeRange: schedRange,
     };
   }
 };

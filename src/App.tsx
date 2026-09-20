@@ -27,7 +27,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppView, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig } from './types';
+import { AppView, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo } from './types';
 import { PRODUCTS } from './constants';
 import { CustomerDashboard } from './components/CustomerDashboard';
 import { ManagerDashboard } from './components/ManagerDashboard';
@@ -40,6 +40,7 @@ import { userService } from './services/userService';
 import { expenseService } from './services/expenseService';
 import { coverageService } from './services/coverageService';
 import { referralService } from './services/referralService';
+import { businessService, DEFAULT_BUSINESS_INFO } from './services/businessService';
 import { supabase } from './lib/supabase';
 import { 
   MOCK_USERS, 
@@ -84,17 +85,12 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
         }
       } else {
         if (!phone.trim() || phone.length < 10) throw new Error('Insira um número de telefone válido com DDD.');
+        const cleanPhone = phone.replace(/\D/g, '');
+        
         try {
           authUser = await authService.loginWithPhone(phone);
         } catch (authErr: any) {
-          const cleanPhone = phone.replace(/\D/g, '');
-          const found = MOCK_USERS.find(u => u.phone === cleanPhone) || {
-            ...MOCK_USERS[3],
-            phone: cleanPhone,
-            name: 'Cliente Teste'
-          };
-          onLogin(found);
-          return;
+          throw new Error(authErr.message || 'Erro ao fazer login com este número. Verifique sua conexão.');
         }
       }
 
@@ -197,35 +193,6 @@ const LoginView = ({ onLogin, onRegister }: { onLogin: (user: AppUser) => void, 
             {loading ? 'CARREGANDO...' : 'ENTRAR NO APLICATIVO'}
           </button>
         </form>
-
-        <div className="mt-6 pt-5 border-t border-slate-100">
-          <p className="text-[11px] text-slate-400 text-center font-black uppercase tracking-wider mb-3">
-            Acesso Rápido para Testes Locais
-          </p>
-          <div className="grid grid-cols-3 gap-2">
-            <button
-              type="button"
-              onClick={() => onLogin(MOCK_USERS[0])}
-              className="p-2.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-900 rounded-xl text-xs font-black text-center border border-yellow-200 transition-all hover:scale-[1.02] active:scale-95"
-            >
-              👔 Gestor
-            </button>
-            <button
-              type="button"
-              onClick={() => onLogin(MOCK_USERS[1])}
-              className="p-2.5 bg-blue-50 hover:bg-blue-100 text-blue-900 rounded-xl text-xs font-black text-center border border-blue-200 transition-all hover:scale-[1.02] active:scale-95"
-            >
-              🛵 Entregador
-            </button>
-            <button
-              type="button"
-              onClick={() => onLogin(MOCK_USERS[3])}
-              className="p-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 rounded-xl text-xs font-black text-center border border-emerald-200 transition-all hover:scale-[1.02] active:scale-95"
-            >
-              🛒 Cliente
-            </button>
-          </div>
-        </div>
       </motion.div>
     </div>
   );
@@ -267,20 +234,9 @@ const Header = ({ user, onLogout }: { user: AppUser, onLogout: () => void }) => 
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
-  const [orders, setOrders] = useState<Order[]>(() => {
-    try {
-      const saved = localStorage.getItem('gas_app_orders');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return MOCK_ORDERS;
-  });
-  const [expenses, setExpenses] = useState<Expense[]>(() => {
-    try {
-      const saved = localStorage.getItem('gas_app_expenses');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return MOCK_EXPENSES;
-  });
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+
   const [coverageAreas, setCoverageAreas] = useState<CoverageArea[]>(MOCK_COVERAGE_AREAS);
   const [allUsers, setAllUsers] = useState<AppUser[]>(MOCK_USERS);
   const [coupons, setCoupons] = useState<Coupon[]>(MOCK_COUPONS);
@@ -298,9 +254,16 @@ export default function App() {
     } catch {}
     return MOCK_BENEFITS_CONFIG;
   });
+  const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_business_settings');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return DEFAULT_BUSINESS_INFO;
+  });
   const [referrals, setReferrals] = useState<Referral[]>(MOCK_REFERRALS);
   const [initialTab, setInitialTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>('home');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true); // true = aguardando restauração de sessão
 
   // Sincronização em tempo real entre abas do navegador (Cliente <-> Gestor <-> Entregador)
   useEffect(() => {
@@ -316,6 +279,8 @@ export default function App() {
           setBenefitsConfig(event.data.config);
         } else if (event.data?.type === 'SYNC_REWARDS' && Array.isArray(event.data.rewards)) {
           setRewards(event.data.rewards);
+        } else if (event.data?.type === 'SYNC_BUSINESS_INFO' && event.data.businessInfo) {
+          setBusinessInfo(event.data.businessInfo);
         }
       };
     } catch {}
@@ -333,6 +298,9 @@ export default function App() {
       if (e.key === 'gas_app_rewards' && e.newValue) {
         try { setRewards(JSON.parse(e.newValue)); } catch {}
       }
+      if (e.key === 'gas_app_business_settings' && e.newValue) {
+        try { setBusinessInfo(JSON.parse(e.newValue)); } catch {}
+      }
     };
     window.addEventListener('storage', handleStorage);
 
@@ -342,91 +310,115 @@ export default function App() {
     };
   }, []);
 
-  // Sync Auth State — check existing session on mount
+  // ────────────────────────────────────────────────────────────────────
+  // Restauração de sessão — fonte primária: onAuthStateChange
+  // Garante que ao recarregar a página o usuário NÃO seja deslogado.
+  // ────────────────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    let authSubscription: any = null;
 
-    // Check for existing session with reasonable 2500ms timeout
-    const initSession = async () => {
-      try {
-        const sessionPromise = supabase.auth.getSession();
-        const timeoutPromise = new Promise<{ data: { session: null } }>((resolve) =>
-          setTimeout(() => resolve({ data: { session: null } }), 2500)
-        );
-        const { data: { session } } = await Promise.race([sessionPromise, timeoutPromise]);
-        if (session?.user && !cancelled) {
-          try {
-            const appUser = await authService.getProfileForUser(
-              session.user.id, session.user.email, session.user.user_metadata
-            );
-            setCurrentUser(appUser);
-          } catch (profileErr) {
-            console.warn('Profile fetch offline fallback:', profileErr);
-          }
-        }
-      } catch (err) {
-        console.warn('Sessão offline:', err);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    // Handle deep-link / auto-login via ?phone= or referral via ?ref=
+    // Checar parâmetros de deep-link
     const params = new URLSearchParams(window.location.search);
     const refParam = params.get('ref');
     if (refParam) {
       localStorage.setItem('gas_app_pending_ref_code', refParam.toUpperCase().trim());
     }
-
     const phoneParam = params.get('phone');
     if (phoneParam) {
       setInitialTab('tracking');
-      setLoading(true);
-      authService.loginWithPhone(phoneParam)
-        .then(async (user) => {
-          if (user && !cancelled) {
-            const appUser = await authService.getProfileForUser(
-              user.id, user.email, user.user_metadata
-            );
-            setCurrentUser(appUser);
-          }
-        })
-        .catch(err => console.error('Auto-login failed:', err))
-        .finally(() => { if (!cancelled) setLoading(false); });
-    } else {
-      initSession();
     }
 
-    // Listen for sign-out events only (safely)
-    let subscription: any = null;
+    // Timeout de segurança: se após 6s o Supabase não respondeu, libera a tela
+    const safetyTimeout = setTimeout(() => {
+      if (!cancelled) {
+        console.warn('Auth timeout: liberando tela de login por segurança.');
+        setLoading(false);
+      }
+    }, 6000);
+
+    // onAuthStateChange é o evento confiável do Supabase.
+    // Dispara com INITIAL_SESSION (sessão existente) ou SIGNED_IN / SIGNED_OUT.
     try {
-      const authRes = supabase.auth.onAuthStateChange((event) => {
+      const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (cancelled) return;
+
         if (event === 'SIGNED_OUT') {
           setCurrentUser(null);
+          clearTimeout(safetyTimeout);
+          setLoading(false);
+          return;
+        }
+
+        if (session?.user) {
+          try {
+            // Deep-link: login automático via phone param
+            if (phoneParam && event === 'INITIAL_SESSION') {
+              // Se veio pelo link de rastreamento, garante que o usuário correto seja carregado
+              const linkedUser = await authService.loginWithPhone(phoneParam).catch(() => session.user);
+              const appUser = await authService.getProfileForUser(
+                (linkedUser || session.user).id,
+                session.user.email,
+                session.user.user_metadata
+              );
+              if (!cancelled) setCurrentUser(appUser);
+            } else {
+              const appUser = await authService.getProfileForUser(
+                session.user.id, session.user.email, session.user.user_metadata
+              );
+              if (!cancelled) setCurrentUser(appUser);
+            }
+          } catch (profileErr) {
+            console.warn('Profile fetch fallback:', profileErr);
+            // Cria objeto mínimo para não bloquear acesso
+            if (!cancelled) {
+              setCurrentUser({
+                id: session.user.id,
+                email: session.user.email,
+                role: (session.user.user_metadata?.role as any) || 'cliente',
+                name: session.user.user_metadata?.name || 'Usuário',
+                phone: session.user.user_metadata?.phone,
+                points: 0,
+                addresses: [],
+                allowedTabs: []
+              });
+            }
+          } finally {
+            clearTimeout(safetyTimeout);
+            if (!cancelled) setLoading(false);
+          }
+        } else {
+          // Sem sessão — mostra tela de login
+          clearTimeout(safetyTimeout);
+          if (!cancelled) setLoading(false);
         }
       });
-      subscription = authRes?.data?.subscription;
+      authSubscription = data?.subscription;
     } catch (e) {
-      console.warn('onAuthStateChange offline:', e);
+      console.warn('onAuthStateChange indisponível:', e);
+      clearTimeout(safetyTimeout);
+      if (!cancelled) setLoading(false);
     }
 
     return () => {
       cancelled = true;
-      if (subscription && typeof subscription.unsubscribe === 'function') {
-        subscription.unsubscribe();
+      clearTimeout(safetyTimeout);
+      if (authSubscription && typeof authSubscription.unsubscribe === 'function') {
+        authSubscription.unsubscribe();
       }
     };
   }, []);
+
 
   // Fetch initial data when user is logged in and maintain live polling
   useEffect(() => {
     if (currentUser) {
       loadData();
       
-      // Polling contínuo a cada 4 segundos para sincronizar pedidos novos em tempo real entre todos os dispositivos
+      // Polling contínuo a cada 2 segundos para sincronizar pedidos novos em tempo real entre todos os dispositivos
       const pollInterval = setInterval(() => {
         loadData();
-      }, 4000);
+      }, 2000);
 
       try {
         const orderSub = orderService.subscribeToOrders(() => {
@@ -446,46 +438,39 @@ export default function App() {
 
   const loadData = async () => {
     try {
-      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals] = await Promise.all([
+      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals, fetchedBusiness] = await Promise.all([
         orderService.getOrders().catch(() => []),
         expenseService.getExpenses().catch(() => []),
         userService.getProfiles().catch(() => []),
         coverageService.getCoverageAreas().catch(() => []),
-        referralService.getReferrals().catch(() => [])
+        referralService.getReferrals().catch(() => []),
+        businessService.getBusinessInfo().catch(() => DEFAULT_BUSINESS_INFO)
       ]);
-      if (fetchedOrders && fetchedOrders.length > 0) {
-        setOrders(fetchedOrders);
-        localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders));
-      } else {
-        const saved = localStorage.getItem('gas_app_orders');
-        if (saved) {
-          try { setOrders(JSON.parse(saved)); } catch { setOrders(MOCK_ORDERS); }
-        } else {
-          setOrders(MOCK_ORDERS);
-          localStorage.setItem('gas_app_orders', JSON.stringify(MOCK_ORDERS));
-        }
-      }
+      setOrders(fetchedOrders || []);
+      localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders || []));
 
-      if (fetchedExpenses && fetchedExpenses.length > 0) {
-        setExpenses(fetchedExpenses);
-        localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses));
-      } else {
-        const saved = localStorage.getItem('gas_app_expenses');
-        if (saved) {
-          try { setExpenses(JSON.parse(saved)); } catch { setExpenses(MOCK_EXPENSES); }
-        } else {
-          setExpenses(MOCK_EXPENSES);
-          localStorage.setItem('gas_app_expenses', JSON.stringify(MOCK_EXPENSES));
-        }
-      }
+      setExpenses(fetchedExpenses || []);
+      localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses || []));
 
       setAllUsers(fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS);
-      setReferrals(fetchedReferrals && fetchedReferrals.length > 0 ? fetchedReferrals : MOCK_REFERRALS);
+      setReferrals(fetchedReferrals || []);
       if (fetchedCoverage && fetchedCoverage.length > 0) {
         setCoverageAreas(fetchedCoverage);
       }
+      if (fetchedBusiness) {
+        setBusinessInfo(fetchedBusiness);
+      }
     } catch (err) {
       console.warn('Usando dados sincronizados locais:', err);
+    }
+  };
+
+  const handleUpdateBusinessInfo = async (newInfo: BusinessInfo) => {
+    setBusinessInfo(newInfo);
+    try {
+      await businessService.saveBusinessInfo(newInfo);
+    } catch (err) {
+      console.warn('Erro ao persistir businessInfo:', err);
     }
   };
 
@@ -498,12 +483,13 @@ export default function App() {
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (key && (key.startsWith('sb-') || key.includes('auth') || key.includes('supabase') || key === 'gas_delivery_user')) {
+        if (key && (key.startsWith('sb-') || key.includes('auth') || key.includes('supabase') || key.startsWith('gas_'))) {
           keysToRemove.push(key);
         }
       }
       keysToRemove.forEach(k => localStorage.removeItem(k));
       sessionStorage.clear();
+
     } catch (err) {
       console.warn('Erro ao limpar storage de auth:', err);
     }
@@ -735,8 +721,17 @@ export default function App() {
   };
 
   if (loading) {
-    return <div className="min-h-screen bg-slate-900 flex items-center justify-center text-white font-bold">CARREGANDO SISTEMA...</div>;
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-4">
+        <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center rotate-3 animate-pulse">
+          <Truck className="text-slate-900 w-10 h-10" />
+        </div>
+        <p className="font-black text-xl tracking-widest">GÁS EXPRESS</p>
+        <p className="text-slate-400 text-sm font-medium animate-pulse">Verificando sessão...</p>
+      </div>
+    );
   }
+
 
   if (!currentUser) {
     return <LoginView onLogin={(user) => setCurrentUser(user)} onRegister={(user) => setCurrentUser(user)} />;
@@ -768,6 +763,7 @@ export default function App() {
                 allDeliveryPersons={allUsers.filter(u => u.role === 'entregador')}
                 benefitsConfig={benefitsConfig}
                 onLogout={handleLogout}
+                businessInfo={businessInfo}
               />
             </motion.div>
           )}
@@ -799,6 +795,8 @@ export default function App() {
                 onUpdateBenefitsConfig={handleUpdateBenefitsConfig}
                 onLogout={handleLogout}
                 onRefreshData={loadData}
+                businessInfo={businessInfo}
+                onUpdateBusinessInfo={handleUpdateBusinessInfo}
               />
             </motion.div>
           )}

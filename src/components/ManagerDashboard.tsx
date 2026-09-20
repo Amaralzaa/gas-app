@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Package, 
@@ -34,14 +34,19 @@ import {
   History,
   AlertCircle,
   LogOut,
-  RotateCw
+  RotateCw,
+  Store,
+  Building2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON } from 'react-leaflet';
 import L from 'leaflet';
-import { AppUser, Order, OrderStatus, Expense, Address, CoverageArea, Coupon, Reward, Referral, BenefitsConfig, UserRole } from '../types';
+import { AppUser, Order, OrderStatus, Expense, Address, CoverageArea, Coupon, Reward, Referral, BenefitsConfig, UserRole, BusinessInfo } from '../types';
 import { authService } from '../services/authService';
 import { supabase } from '../lib/supabase';
+import { playNewOrderSound, unlockAudio } from '../utils/sounds';
+import { BusinessSettingsTab } from './BusinessSettingsTab';
+import { DEFAULT_BUSINESS_INFO } from '../services/businessService';
 
 // Fix Leaflet default icon issue
 let DefaultIcon = L.icon({
@@ -75,6 +80,8 @@ interface ManagerDashboardProps {
   onUpdateBenefitsConfig: (config: BenefitsConfig) => void;
   onLogout?: () => void;
   onRefreshData?: () => void;
+  businessInfo?: BusinessInfo;
+  onUpdateBusinessInfo?: (info: BusinessInfo) => Promise<void> | void;
 }
 
 export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ 
@@ -98,9 +105,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   benefitsConfig,
   onUpdateBenefitsConfig,
   onLogout,
-  onRefreshData
+  onRefreshData,
+  businessInfo = DEFAULT_BUSINESS_INFO,
+  onUpdateBusinessInfo
 }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators'>('tracking');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators' | 'meu_negocio'>('tracking');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos'>('Todos');
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<Order | null>(null);
   const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
@@ -156,6 +165,53 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     const timer = setInterval(() => setCurrentTime(Date.now()), 30000);
     return () => clearInterval(timer);
   }, []);
+
+  // --- Notificação sonora: novo pedido chegou para o Gestor ---
+  const prevPendingIdsRef = useRef<Set<string>>(new Set(orders.filter(o => o.status === 'Pendente').map(o => o.id)));
+  const audioUnlockedRef = useRef(false);
+
+  // Desbloqueia áudio na primeira interação do usuário
+  useEffect(() => {
+    const unlock = () => {
+      if (!audioUnlockedRef.current) {
+        unlockAudio();
+        audioUnlockedRef.current = true;
+      }
+    };
+    window.addEventListener('click', unlock, { once: true });
+    window.addEventListener('touchstart', unlock, { once: true });
+    return () => {
+      window.removeEventListener('click', unlock);
+      window.removeEventListener('touchstart', unlock);
+    };
+  }, []);
+
+  useEffect(() => {
+    const currentPending = orders.filter(o => o.status === 'Pendente');
+    const newOrders = currentPending.filter(o => !prevPendingIdsRef.current.has(o.id));
+
+    if (newOrders.length > 0) {
+      // Toca o som de novo pedido
+      playNewOrderSound().catch(() => {});
+
+      // Notificação do sistema (se permitida)
+      if ('Notification' in window && Notification.permission === 'granted') {
+        newOrders.forEach(o => {
+          new Notification('🛒 Novo Pedido!', {
+            body: `${o.customerName} — ${o.address.street}, ${o.address.neighborhood}`,
+            icon: '/favicon.ico',
+            tag: o.id
+          });
+        });
+      } else if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    }
+
+    // Atualiza a referência com os IDs pendentes atuais
+    prevPendingIdsRef.current = new Set(currentPending.map(o => o.id));
+  }, [orders]);
+
 
   const getElapsedMinutes = (dateStr: string) => {
     if (!dateStr) return 0;
@@ -589,7 +645,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     { id: 'map', label: 'Monitoramento' },
     { id: 'coverage', label: 'Cobertura' },
     { id: 'benefits', label: 'Benefícios' },
-    { id: 'predictions', label: 'Previsão' }
+    { id: 'predictions', label: 'Previsão' },
+    { id: 'meu_negocio', label: 'Meu Negócio' }
   ];
 
   return (
@@ -671,6 +728,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               <Users className="w-5 h-5" /> Colaboradores
             </button>
           )}
+          {user.role === 'gestor' && (
+            <button 
+              onClick={() => setActiveTab('meu_negocio')} 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'meu_negocio' ? 'bg-yellow-400 text-slate-900' : 'text-slate-400 hover:bg-slate-800'}`}
+            >
+              <Store className="w-5 h-5" /> Meu Negócio
+            </button>
+          )}
         </nav>
 
         <div className="p-4 border-t border-slate-800 space-y-2">
@@ -684,8 +749,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </div>
           </div>
           {onLogout && (
-            <button
-              type="button"
+            <button 
+              type="button" 
               onClick={onLogout}
               className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-800 hover:bg-red-600/90 text-slate-300 hover:text-white rounded-xl text-xs font-bold transition-all border border-slate-700/60 cursor-pointer shadow-sm"
               title="Sair do Painel"
@@ -708,6 +773,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             {(user.role === 'gestor' || user.allowedTabs?.includes('map')) && <button onClick={() => setActiveTab('map')} className={`p-2 rounded-lg ${activeTab === 'map' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapIcon className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('coverage')) && <button onClick={() => setActiveTab('coverage')} className={`p-2 rounded-lg ${activeTab === 'coverage' ? 'bg-yellow-400' : 'bg-slate-100'}`}><MapPin className="w-5 h-5" /></button>}
             {user.role === 'gestor' && <button onClick={() => setActiveTab('collaborators')} className={`p-2 rounded-lg ${activeTab === 'collaborators' ? 'bg-yellow-400' : 'bg-slate-100'}`}><Users className="w-5 h-5" /></button>}
+            {user.role === 'gestor' && <button onClick={() => setActiveTab('meu_negocio')} className={`p-2 rounded-lg ${activeTab === 'meu_negocio' ? 'bg-yellow-400' : 'bg-slate-100'}`} title="Meu Negócio"><Store className="w-5 h-5" /></button>}
             {onLogout && (
               <button 
                 type="button" 
@@ -730,8 +796,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 {activeTab === 'orders' && "Gestão de Pedidos"}
                 {activeTab === 'map' && "Mapa de Entregas"}
                 {activeTab === 'coverage' && "Área de Cobertura"}
+                {activeTab === 'benefits' && "Gestão de Benefícios & Cupons"}
+                {activeTab === 'predictions' && "Previsão de Consumo"}
+                {activeTab === 'collaborators' && "Gestão de Colaboradores"}
+                {activeTab === 'meu_negocio' && "Meu Negócio & Estabelecimento"}
               </h2>
-              <p className="text-slate-500 font-medium">Acompanhe o desempenho da sua revenda em tempo real.</p>
+              <p className="text-slate-500 font-medium">
+                {activeTab === 'meu_negocio' ? "Gerencie horários de atendimento, logotipo e dados da sua empresa." : "Acompanhe o desempenho da sua revenda em tempo real."}
+              </p>
             </div>
           </header>
 
@@ -934,6 +1006,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                                   <span className="text-[10px] font-black text-amber-600 uppercase mt-1 block">Pendente</span>
                                 </div>
                               </div>
+
+                              {o.isScheduled && (
+                                <div className="bg-purple-100/90 border border-purple-300 text-purple-900 rounded-xl px-2.5 py-1 text-[11px] font-black flex items-center gap-1.5 mb-2 shadow-sm">
+                                  <Calendar className="w-3.5 h-3.5 text-purple-700 flex-shrink-0" />
+                                  <span className="truncate">📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                                </div>
+                              )}
 
                               <div className="bg-slate-50 rounded-2xl p-3 my-2 space-y-1.5 border border-slate-100 text-xs">
                                 <div className="flex items-center justify-between font-bold text-slate-800">
@@ -2142,6 +2221,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               </div>
             </motion.div>
           )}
+
+          {activeTab === 'meu_negocio' && (
+            <motion.div key="meu_negocio" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+              <BusinessSettingsTab 
+                businessInfo={businessInfo}
+                onSave={onUpdateBusinessInfo || (() => {})}
+              />
+            </motion.div>
+          )}
         </AnimatePresence>
       </div>
     </main>
@@ -2572,6 +2660,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       <p className="text-xs text-slate-400 mt-0.5">
                         Realizado em {new Date(o.createdAt).toLocaleDateString('pt-BR')} às {new Date(o.createdAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                       </p>
+
+                      {o.isScheduled && (
+                        <div className="mt-2.5 bg-purple-500/30 border border-purple-400/50 rounded-xl px-3 py-1.5 flex items-center gap-2 text-purple-200 text-xs font-bold">
+                          <Calendar className="w-4 h-4 text-purple-300 flex-shrink-0" />
+                          <span>Pedido Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriod === 'manha' ? 'Manhã 08h-13h' : 'Tarde 13h-19h'})</span>
+                        </div>
+                      )}
                     </div>
 
                     {/* Relógio em Destaque */}

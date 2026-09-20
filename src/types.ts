@@ -51,6 +51,10 @@ export interface Order {
   feedback?: string;
   cancellationReason?: string;
   cancelledAt?: string;
+  isScheduled?: boolean;
+  scheduledDate?: string;
+  scheduledPeriod?: 'manha' | 'tarde';
+  scheduledTimeRange?: string;
 }
 
 export interface Freebie {
@@ -158,4 +162,45 @@ export interface Referral {
   pointsAwarded: number;
   createdAt: string;
   validatedAt?: string;
+}
+
+export interface DayHours {
+  isOpen: boolean;
+  open: string;   // "08:00"
+  close: string;  // "19:00"
+}
+
+export interface OpeningHours {
+  monday: DayHours;
+  tuesday: DayHours;
+  wednesday: DayHours;
+  thursday: DayHours;
+  friday: DayHours;
+  saturday: DayHours;
+  sunday: DayHours;
+}
+
+export interface BusinessInfo {
+  id: string;
+  name: string;
+  tradeName?: string;
+  cnpj?: string;
+  phone: string;
+  whatsapp?: string;
+  email?: string;
+  logoUrl?: string;
+  address: {
+    street: string;
+    number: string;
+    neighborhood: string;
+    city: string;
+    state: string;
+    cep: string;
+    complement?: string;
+  };
+  openingHours: OpeningHours;
+  isOpenOverride?: boolean | null; // null = automático por horário, true = forçar aberto, false = forçar fechado
+  minOrderValue?: number;
+  deliveryFee?: number;
+  updatedAt?: string;
 }

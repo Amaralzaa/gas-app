@@ -14,13 +14,22 @@ export const authService = {
         .eq('id', user.id)
         .maybeSingle();
 
+      let localName = '';
+      try {
+        localName = localStorage.getItem('gas_app_customer_name') || '';
+      } catch {}
+
       // Self-healing: If profile is missing but user is authenticated
       if (!profile || error) {
         console.log('Profile missing or error, attempting self-healing creation...');
+        const resolvedName = (localName && localName.trim()) 
+          || user.user_metadata?.name 
+          || (user.user_metadata?.role === 'cliente' ? 'Cliente' : 'Usuário');
+
         const newProfile = {
           id: user.id,
           email: user.email,
-          name: user.user_metadata?.name || 'Usuário',
+          name: resolvedName,
           role: (user.user_metadata?.role as UserRole) || 'cliente',
           phone: user.user_metadata?.phone || '',
           points: 0,
@@ -39,7 +48,7 @@ export const authService = {
             id: user.id,
             email: user.email,
             role: (user.user_metadata?.role as UserRole) || 'cliente',
-            name: user.user_metadata?.name || 'Usuário',
+            name: resolvedName,
             phone: user.user_metadata?.phone,
             points: 0,
             addresses: [],
@@ -49,11 +58,15 @@ export const authService = {
         return newProfile as AppUser;
       }
 
+      const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')
+        ? profile.name
+        : (localName || profile.name || user.user_metadata?.name || 'Cliente');
+
       return {
         id: profile.id,
         email: profile.email,
         role: profile.role as UserRole,
-        name: profile.name,
+        name: finalName,
         phone: profile.phone,
         points: profile.points,
         addresses: profile.addresses || [],
@@ -181,6 +194,11 @@ export const authService = {
   },
 
   async getProfileForUser(userId: string, userEmail?: string, userMeta?: any): Promise<AppUser> {
+    let localName = '';
+    try {
+      localName = localStorage.getItem('gas_app_customer_name') || '';
+    } catch {}
+
     try {
       const { data: profile } = await supabase
         .from('profiles')
@@ -189,11 +207,20 @@ export const authService = {
         .maybeSingle();
 
       if (profile) {
+        const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')
+          ? profile.name
+          : (localName || profile.name || userMeta?.name || 'Cliente');
+
+        // Se tínhamos um nome local diferente do genérico do banco, sincroniza em background
+        if (localName && localName !== profile.name && (profile.name === 'Usuário' || profile.name === 'Cliente')) {
+          Promise.resolve(supabase.from('profiles').update({ name: localName }).eq('id', userId)).catch(() => {});
+        }
+
         return {
           id: profile.id,
           email: profile.email,
           role: profile.role as UserRole,
-          name: profile.name,
+          name: finalName,
           phone: profile.phone,
           points: profile.points,
           addresses: profile.addresses || [],
@@ -204,25 +231,27 @@ export const authService = {
 
       // Self-healing: profile missing, create it from metadata
       console.log('Profile missing, self-healing...');
+      const resolvedName = (localName && localName.trim()) || userMeta?.name || 'Cliente';
       const newProfile = {
         id: userId,
         email: userEmail,
-        name: userMeta?.name || 'Usuário',
+        name: resolvedName,
         role: (userMeta?.role as UserRole) || 'cliente',
         phone: userMeta?.phone || '',
         points: 0,
         addresses: [],
         allowedTabs: []
       };
-      await supabase.from('profiles').upsert(newProfile).catch(() => {});
+      await Promise.resolve(supabase.from('profiles').upsert(newProfile)).catch(() => {});
       return newProfile as AppUser;
     } catch {
       // Fallback: return minimal user so the app never hangs
+      const fallbackName = (localName && localName.trim()) || userMeta?.name || 'Cliente';
       return {
         id: userId,
         email: userEmail,
         role: (userMeta?.role as UserRole) || 'cliente',
-        name: userMeta?.name || 'Usuário',
+        name: fallbackName,
         phone: userMeta?.phone,
         points: 0,
         addresses: [],

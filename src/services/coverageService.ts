@@ -41,7 +41,7 @@ export const coverageService = {
     const idsToDelete = existingIds.filter(id => !incomingIds.includes(id));
 
     // 2. Perform operations
-    const promises: Promise<any>[] = [
+    const promises: PromiseLike<any>[] = [
       supabase.from('coverage_areas').upsert(rows)
     ];
 
