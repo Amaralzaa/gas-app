@@ -43,34 +43,40 @@ export const MOCK_USERS: AppUser[] = [
   }
 ];
 
+import { COVERAGE_BOUNDARIES } from './data/coverageBoundaries';
+
 export const MOCK_COVERAGE_AREAS: CoverageArea[] = [
   {
     id: 'cov-1',
     neighborhood: 'Icaraí',
     city: 'Niterói',
     allowedCeps: ['24220', '24230'],
-    center: { lat: -22.905, lng: -43.11 }
+    center: COVERAGE_BOUNDARIES['cov-1']?.center || { lat: -22.905, lng: -43.11 },
+    boundary: COVERAGE_BOUNDARIES['cov-1']?.boundary
   },
   {
     id: 'cov-2',
     neighborhood: 'Santa Rosa',
     city: 'Niterói',
     allowedCeps: ['24240'],
-    center: { lat: -22.902, lng: -43.098 }
+    center: COVERAGE_BOUNDARIES['cov-2']?.center || { lat: -22.902, lng: -43.098 },
+    boundary: COVERAGE_BOUNDARIES['cov-2']?.boundary
   },
   {
     id: 'cov-3',
     neighborhood: 'Ingá',
     city: 'Niterói',
     allowedCeps: ['24210'],
-    center: { lat: -22.904, lng: -43.125 }
+    center: COVERAGE_BOUNDARIES['cov-3']?.center || { lat: -22.904, lng: -43.125 },
+    boundary: COVERAGE_BOUNDARIES['cov-3']?.boundary
   },
   {
     id: 'cov-4',
     neighborhood: 'Centro',
     city: 'Niterói',
     allowedCeps: ['24020', '24030'],
-    center: { lat: -22.885, lng: -43.122 }
+    center: COVERAGE_BOUNDARIES['cov-4']?.center || { lat: -22.885, lng: -43.122 },
+    boundary: COVERAGE_BOUNDARIES['cov-4']?.boundary
   }
 ];
 

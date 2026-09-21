@@ -139,7 +139,7 @@ const LoginView = ({
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
+    <div className="h-full w-full bg-slate-900 flex items-center justify-center p-4 overflow-y-auto">
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -529,7 +529,7 @@ export default function App() {
         return () => clearInterval(pollInterval);
       }
     }
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   const loadData = async () => {
     try {
@@ -633,9 +633,15 @@ export default function App() {
     }
   };
 
-  const handleUpdateOrder = async (updatedOrder: Order) => {
-    const prevOrder = orders.find(o => o.id === updatedOrder.id);
-    const isNowCompleted = updatedOrder.status === 'Concluído' && prevOrder?.status !== 'Concluído';
+  const handleUpdateOrder = async (orderToUpdate: Order) => {
+    const prevOrder = orders.find(o => o.id === orderToUpdate.id);
+    const isNowCompleted = orderToUpdate.status === 'Concluído' && prevOrder?.status !== 'Concluído';
+    const updatedOrder: Order = {
+      ...orderToUpdate,
+      completedAt: (isNowCompleted && !orderToUpdate.completedAt) || (orderToUpdate.status === 'Concluído' && !orderToUpdate.completedAt)
+        ? new Date().toISOString()
+        : orderToUpdate.completedAt
+    };
 
     setOrders(prev => {
       const updated = prev.map(o => o.id === updatedOrder.id ? updatedOrder : o);
@@ -852,13 +858,13 @@ export default function App() {
   }
 
   return (
-    <div className="font-sans text-slate-900 min-h-screen flex flex-col">
+    <div className="font-sans text-slate-900 h-screen flex flex-col overflow-hidden">
       <Header user={currentUser} businessInfo={businessInfo} onLogout={handleLogout} />
       
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-hidden relative flex flex-col min-h-0">
         <AnimatePresence mode="wait">
           {currentUser.role === 'cliente' && (
-            <motion.div key="cliente" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div key="cliente" className="h-full w-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <CustomerDashboard 
                 user={currentUser} 
                 orders={orders} 
@@ -883,7 +889,7 @@ export default function App() {
           )}
           
           {(currentUser.role === 'gestor' || currentUser.role === 'admin') && (
-            <motion.div key="gestor" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div key="gestor" className="h-full w-full overflow-hidden flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <ManagerDashboard 
                 user={currentUser}
                 orders={orders} 
@@ -916,7 +922,7 @@ export default function App() {
           )}
           
           {currentUser.role === 'entregador' && (
-            <motion.div key="entregador" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div key="entregador" className="h-full w-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <DeliveryDashboard 
                 user={currentUser} 
                 orders={orders.filter(o => o.deliveryPersonId === currentUser.id)} 

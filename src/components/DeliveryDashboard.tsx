@@ -25,6 +25,7 @@ import L from 'leaflet';
 import { AppUser, Order, Expense, Product, Address, BusinessInfo } from '../types';
 import { PRODUCTS } from '../constants';
 import { playAssignedOrderSound, unlockAudio } from '../utils/sounds';
+import { showSafeNotification } from '../utils/notifications';
 
 interface DeliveryDashboardProps {
   user: AppUser;
@@ -60,7 +61,22 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
   const [gpsStatus, setGpsStatus] = useState<string>('Aguardando...');
 
+  const lastLocationRef = useRef<{ lat: number; lng: number } | null>(null);
+  const lastUpdateRef = useRef<number>(0);
+
   const updateLocation = (lat: number, lng: number) => {
+    const now = Date.now();
+    // Limita atualizações a no máximo 1 a cada 4 segundos se a variação for insignificante
+    if (lastLocationRef.current && (now - lastUpdateRef.current < 4000)) {
+      const distLat = Math.abs(lastLocationRef.current.lat - lat);
+      const distLng = Math.abs(lastLocationRef.current.lng - lng);
+      if (distLat < 0.00008 && distLng < 0.00008) {
+        return;
+      }
+    }
+    lastLocationRef.current = { lat, lng };
+    lastUpdateRef.current = now;
+
     onUpdateUser({ ...user, location: { lat, lng } });
     orders
       .filter(o => o.deliveryPersonId === user.id && o.status === 'Em Rota')
@@ -96,6 +112,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   }, []);
 
   // --- Notificação sonora: pedido atribuído ao Entregador ---
+  const isInitialLoadRef = useRef(true);
   const prevAssignedIdsRef = useRef<Set<string>>(
     new Set(orders.filter(o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')).map(o => o.id))
   );
@@ -121,22 +138,30 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     const myAssigned = orders.filter(
       o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')
     );
+
+    // Evita disparar alerta para pedidos que já estavam atribuídos na abertura inicial da página
+    if (isInitialLoadRef.current) {
+      if (orders.length > 0) {
+        isInitialLoadRef.current = false;
+        prevAssignedIdsRef.current = new Set(myAssigned.map(o => o.id));
+      }
+      return;
+    }
+
     const newAssigned = myAssigned.filter(o => !prevAssignedIdsRef.current.has(o.id));
 
     if (newAssigned.length > 0) {
       playAssignedOrderSound().catch(() => {});
 
-      if ('Notification' in window && Notification.permission === 'granted') {
-        newAssigned.forEach(o => {
-          new Notification('🚚 Novo Pedido Atribuído!', {
-            body: `${o.customerName} — ${o.address.street}, ${o.address.neighborhood}`,
-            icon: '/favicon.ico',
-            tag: o.id
-          });
+      newAssigned.forEach(o => {
+        const street = o.address?.street || 'Endereço';
+        const neighborhood = o.address?.neighborhood || '';
+        showSafeNotification('🚚 Novo Pedido Atribuído!', {
+          body: `${o.customerName || 'Cliente'} — ${street}${neighborhood ? `, ${neighborhood}` : ''}`,
+          icon: '/favicon.ico',
+          tag: o.id
         });
-      } else if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
+      });
     }
 
     prevAssignedIdsRef.current = new Set(myAssigned.map(o => o.id));
@@ -205,7 +230,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   }, 0);
 
   const handleComplete = (order: Order) => {
-    onUpdateOrder({ ...order, status: 'Concluído' });
+    onUpdateOrder({ ...order, status: 'Concluído', completedAt: new Date().toISOString() });
   };
 
   const handleNewSale = () => {
@@ -275,18 +300,18 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                         {idx + 1}
                       </div>
                       <span className="text-[10px] font-black bg-slate-700 text-slate-300 px-2 py-0.5 rounded uppercase">#{o.id}</span>
-                      <p className="text-lg font-black text-yellow-400 ml-auto">R$ {o.total.toFixed(2)}</p>
+                      <p className="text-lg font-black text-yellow-400 ml-auto">R$ {(o.total || 0).toFixed(2)}</p>
                     </div>
 
-                    <h3 className="font-black text-lg mb-1">{o.customerName}</h3>
+                    <h3 className="font-black text-lg mb-1">{o.customerName || 'Cliente'}</h3>
                     <div className="text-slate-400 text-sm mb-1 flex items-start gap-2">
                       <MapPin className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-                      <span>{o.address.street}, {o.address.number}{o.address.complement ? ` - ${o.address.complement}` : ''}</span>
+                      <span>{o.address?.street || 'Endereço não informado'}{o.address?.number ? `, ${o.address.number}` : ''}{o.address?.complement ? ` - ${o.address.complement}` : ''}</span>
                     </div>
-                    {o.address.reference && (
+                    {o.address?.reference && (
                       <p className="text-[11px] text-slate-500 ml-6 mb-1">📍 {o.address.reference}</p>
                     )}
-                    <p className="text-[11px] text-slate-500 ml-6 mb-2">{o.address.neighborhood} · {o.paymentMethod}</p>
+                    <p className="text-[11px] text-slate-500 ml-6 mb-2">{o.address?.neighborhood || ''} · {o.paymentMethod || 'Dinheiro'}</p>
 
                     {o.isScheduled && (
                       <div className="bg-purple-950/80 border border-purple-500/50 text-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold mb-3 flex items-center gap-1.5">
@@ -297,7 +322,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
                     <div className="grid grid-cols-2 gap-3 mb-3">
                       <a
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.address.street} ${o.address.number} ${o.address.neighborhood} ${o.address.city}`)}`}
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.address?.street || ''} ${o.address?.number || ''} ${o.address?.neighborhood || ''} ${o.address?.city || ''}`.trim())}`}
                         target="_blank"
                         rel="noreferrer"
                         className="bg-blue-600 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm"
@@ -317,10 +342,10 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     {o.status === 'Em Rota' && (
                       <button
                         onClick={() => {
-                          const link = `${window.location.origin}?phone=${o.phone}`;
+                          const link = `${window.location.origin}?phone=${o.phone || ''}`;
                           const storeName = businessInfo?.name?.trim() || 'Gás Express';
-                          const message = `Olá ${o.customerName}, aqui é o entregador da ${storeName}! Estou saindo com seu pedido agora. Acompanhe minha localização em tempo real aqui: ${link}`;
-                          window.open(`https://wa.me/55${o.phone.replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
+                          const message = `Olá ${o.customerName || 'Cliente'}, aqui é o entregador da ${storeName}! Estou saindo com seu pedido agora. Acompanhe minha localização em tempo real aqui: ${link}`;
+                          window.open(`https://wa.me/55${(o.phone || '').replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
                         }}
                         className="w-full bg-slate-700 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm text-yellow-400"
                       >
@@ -387,8 +412,8 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     {/* Marcadores dos Pedidos */}
                     {myDeliveries.map((order, idx) => {
                       // Usa a lat/lng do endereço geocodificado ou cai no centro de niterói para testar
-                      const lat = order.address.lat || -22.903 + (idx * 0.001);
-                      const lng = order.address.lng || -43.112 + (idx * 0.0005);
+                      const lat = order.address?.lat || -22.903 + (idx * 0.001);
+                      const lng = order.address?.lng || -43.112 + (idx * 0.0005);
                       const color = order.status === 'Em Rota' ? '#3b82f6' : '#f97316';
                       
                       return (
@@ -404,8 +429,8 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                           <Popup>
                             <div className="text-slate-900">
                               <div className="font-bold">Parada {idx + 1}</div>
-                              <div className="text-xs">{order.customerName}</div>
-                              <div className="text-xs text-slate-500">{order.address.street}</div>
+                              <div className="text-xs">{order.customerName || 'Cliente'}</div>
+                              <div className="text-xs text-slate-500">{order.address?.street || 'Endereço'}</div>
                             </div>
                           </Popup>
                         </Marker>

@@ -92,6 +92,17 @@ export const orderService = {
     if (updates.feedback !== undefined) payload.feedback = updates.feedback;
     if (updates.cancellationReason !== undefined) payload.cancellation_reason = updates.cancellationReason;
     if (updates.cancelledAt !== undefined) payload.cancelled_at = updates.cancelledAt;
+    if (updates.completedAt !== undefined) {
+      payload.estimated_arrival = updates.completedAt;
+      const completedNote = `[Concluído em: ${updates.completedAt}]`;
+      if (payload.feedback) {
+        if (!payload.feedback.includes('[Concluído em:')) {
+          payload.feedback = `${payload.feedback} | ${completedNote}`;
+        }
+      } else {
+        payload.feedback = completedNote;
+      }
+    }
 
     let { error } = await supabase
       .from('orders')
@@ -151,6 +162,16 @@ export const orderService = {
       }
     }
 
+    const isCompletedFromNote = dbOrder.feedback?.includes('[Concluído em:');
+    let completedAtDate = dbOrder.completed_at;
+    if (!completedAtDate && isCompletedFromNote) {
+      const match = dbOrder.feedback.match(/\[Concluído em:\s*([^\]]+)\]/);
+      if (match) completedAtDate = match[1];
+    }
+    if (!completedAtDate && dbOrder.status === 'Concluído' && dbOrder.estimated_arrival) {
+      completedAtDate = dbOrder.estimated_arrival;
+    }
+
     return {
       id: dbOrder.id,
       customerId: dbOrder.customer_id,
@@ -172,6 +193,7 @@ export const orderService = {
       feedback: dbOrder.feedback,
       cancellationReason: dbOrder.cancellation_reason || feedbackReason,
       cancelledAt: dbOrder.cancelled_at,
+      completedAt: completedAtDate,
       isScheduled: dbOrder.is_scheduled ?? (isSchedFromNote || false),
       scheduledDate: schedDate,
       scheduledPeriod: schedPeriod,

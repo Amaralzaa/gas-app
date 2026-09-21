@@ -51,6 +51,7 @@ export interface Order {
   feedback?: string;
   cancellationReason?: string;
   cancelledAt?: string;
+  completedAt?: string;
   isScheduled?: boolean;
   scheduledDate?: string;
   scheduledPeriod?: string;

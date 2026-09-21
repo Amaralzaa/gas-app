@@ -39,14 +39,18 @@ import {
   Building2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MapContainer, TileLayer, Marker, Popup, GeoJSON } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { AppUser, Order, OrderStatus, Expense, Address, CoverageArea, Coupon, Reward, Referral, BenefitsConfig, UserRole, BusinessInfo } from '../types';
+import { createCirclePolygon } from '../utils/geoUtils';
+import { showSafeNotification } from '../utils/notifications';
 import { authService } from '../services/authService';
 import { supabase } from '../lib/supabase';
 import { playNewOrderSound, unlockAudio } from '../utils/sounds';
 import { BusinessSettingsTab } from './BusinessSettingsTab';
 import { DEFAULT_BUSINESS_INFO } from '../services/businessService';
+import { DashboardMetricsTab } from './manager/DashboardMetricsTab';
+import { PredictionsCRMTab } from './manager/PredictionsCRMTab';
 
 // Fix Leaflet default icon issue
 let DefaultIcon = L.icon({
@@ -83,6 +87,65 @@ interface ManagerDashboardProps {
   businessInfo?: BusinessInfo;
   onUpdateBusinessInfo?: (info: BusinessInfo) => Promise<void> | void;
 }
+
+const CoverageMapController: React.FC<{
+  selectedArea: CoverageArea | undefined;
+  coverageAreas: CoverageArea[];
+}> = ({ selectedArea, coverageAreas }) => {
+  const map = useMap();
+
+  useEffect(() => {
+    // 1. Se houver um bairro específico selecionado
+    if (selectedArea) {
+      if (selectedArea.boundary) {
+        try {
+          const layer = L.geoJSON(selectedArea.boundary);
+          const bounds = layer.getBounds();
+          if (bounds.isValid()) {
+            map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15, animate: true });
+            return;
+          }
+        } catch (e) {
+          console.error("Erro ao enquadrar limites do bairro selecionado:", e);
+        }
+      }
+      if (selectedArea.center) {
+        map.flyTo([selectedArea.center.lat, selectedArea.center.lng], 14, { animate: true });
+        return;
+      }
+    }
+
+    // 2. Nenhum selecionado: enquadra todos os bairros atendidos com polígonos
+    const validBoundaries = coverageAreas
+      .map(a => a.boundary || (a.center ? createCirclePolygon(a.center.lat, a.center.lng, 1.2) : null))
+      .filter(Boolean);
+
+    if (validBoundaries.length > 0) {
+      try {
+        const layers = validBoundaries.map(b => L.geoJSON(b));
+        const group = L.featureGroup(layers);
+        const bounds = group.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [40, 40], animate: true });
+          return;
+        }
+      } catch (e) {
+        console.error("Erro ao enquadrar todos os bairros:", e);
+      }
+    }
+
+    // Fallback por centros
+    const centers = coverageAreas.filter(a => a.center).map(a => [a.center!.lat, a.center!.lng] as [number, number]);
+    if (centers.length > 0) {
+      const bounds = L.latLngBounds(centers);
+      if (bounds.isValid()) {
+        map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14, animate: true });
+      }
+    }
+  }, [selectedArea, coverageAreas, map]);
+
+  return null;
+};
 
 export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({ 
   user,
@@ -167,6 +230,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   }, []);
 
   // --- Notificação sonora: novo pedido chegou para o Gestor ---
+  const isInitialLoadRef = useRef(true);
   const prevPendingIdsRef = useRef<Set<string>>(new Set(orders.filter(o => o.status === 'Pendente').map(o => o.id)));
   const audioUnlockedRef = useRef(false);
 
@@ -188,24 +252,32 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
   useEffect(() => {
     const currentPending = orders.filter(o => o.status === 'Pendente');
+
+    // Evita disparar notificação inicial ao carregar a página pela primeira vez
+    if (isInitialLoadRef.current) {
+      if (orders.length > 0) {
+        isInitialLoadRef.current = false;
+        prevPendingIdsRef.current = new Set(currentPending.map(o => o.id));
+      }
+      return;
+    }
+
     const newOrders = currentPending.filter(o => !prevPendingIdsRef.current.has(o.id));
 
     if (newOrders.length > 0) {
       // Toca o som de novo pedido
       playNewOrderSound().catch(() => {});
 
-      // Notificação do sistema (se permitida)
-      if ('Notification' in window && Notification.permission === 'granted') {
-        newOrders.forEach(o => {
-          new Notification('🛒 Novo Pedido!', {
-            body: `${o.customerName} — ${o.address.street}, ${o.address.neighborhood}`,
-            icon: '/favicon.ico',
-            tag: o.id
-          });
+      // Notificação do sistema (segura para Desktop e Mobile)
+      newOrders.forEach(o => {
+        const street = o.address?.street || 'Endereço';
+        const neighborhood = o.address?.neighborhood || '';
+        showSafeNotification('🛒 Novo Pedido!', {
+          body: `${o.customerName || 'Cliente'} — ${street}${neighborhood ? `, ${neighborhood}` : ''}`,
+          icon: '/favicon.ico',
+          tag: o.id
         });
-      } else if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
+      });
     }
 
     // Atualiza a referência com os IDs pendentes atuais
@@ -213,17 +285,40 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   }, [orders]);
 
 
-  const getElapsedMinutes = (dateStr: string) => {
-    if (!dateStr) return 0;
-    const created = new Date(dateStr).getTime();
+  const getOrderElapsedMinutes = (order: { createdAt?: string; completedAt?: string; estimatedArrival?: string; cancelledAt?: string; status?: OrderStatus }) => {
+    if (!order?.createdAt) return 0;
+    const created = new Date(order.createdAt).getTime();
     if (isNaN(created)) return 0;
-    return Math.max(0, Math.floor((currentTime - created) / 60000));
+
+    let end = currentTime;
+    if (order.status === 'Concluído') {
+      const comp = order.completedAt || order.estimatedArrival;
+      if (comp) {
+        const parsed = new Date(comp).getTime();
+        if (!isNaN(parsed) && parsed >= created) end = parsed;
+      }
+    } else if (order.status === 'Cancelado' && order.cancelledAt) {
+      const parsed = new Date(order.cancelledAt).getTime();
+      if (!isNaN(parsed) && parsed >= created) end = parsed;
+    }
+    return Math.max(0, Math.floor((end - created) / 60000));
+  };
+
+  const getElapsedMinutes = (dateStr: string, completedAtStr?: string, status?: OrderStatus, cancelledAtStr?: string) => {
+    return getOrderElapsedMinutes({ createdAt: dateStr, completedAt: completedAtStr, status, cancelledAt: cancelledAtStr });
   };
 
   const getCustomerOrdersCount = (customerId: string, phone?: string) => {
-    return orders.filter(o => o.customerId === customerId || (phone && o.phone === phone)).length;
+    const cleanPhone = (phone || '').replace(/\D/g, '');
+    return orders.filter(o => {
+      const cleanOPhone = (o.phone || '').replace(/\D/g, '');
+      const matchId = !!(customerId && o.customerId && o.customerId === customerId);
+      const matchPhone = !!(cleanPhone.length >= 8 && cleanOPhone.length >= 8 && cleanOPhone === cleanPhone);
+      return matchId || matchPhone;
+    }).length;
   };
   const [areaToDelete, setAreaToDelete] = useState<string | null>(null);
+  const [selectedCoverageAreaId, setSelectedCoverageAreaId] = useState<string | null>(null);
   const [assigningOrder, setAssigningOrder] = useState<Order | null>(null);
   const [isAddingOrder, setIsAddingOrder] = useState(false);
   const [isAddingCoverage, setIsAddingCoverage] = useState(false);
@@ -312,8 +407,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
   const customerPredictions = useMemo(() => {
     return allCustomers.map(customer => {
+      const cleanCustPhone = (customer.phone || '').replace(/\D/g, '');
       const customerOrders = orders
-        .filter(o => o.customerId === customer.id && o.status === 'Concluído')
+        .filter(o => {
+          const cleanOPhone = (o.phone || '').replace(/\D/g, '');
+          const matchId = !!(customer.id && o.customerId && o.customerId === customer.id);
+          const matchPhone = !!(cleanCustPhone.length >= 8 && cleanOPhone.length >= 8 && cleanOPhone === cleanCustPhone);
+          return (matchId || matchPhone) && o.status === 'Concluído';
+        })
         .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
       let avgInterval = 0;
@@ -446,8 +547,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     if (!newArea.neighborhood || !newArea.city) return;
     
     setIsGeocoding(true);
-    let center = { lat: -22.825 + (Math.random() - 0.5) * 0.02, lng: -43.055 + (Math.random() - 0.5) * 0.02 };
-    let boundary = null;
+    let center = { lat: -22.905 + (Math.random() - 0.5) * 0.02, lng: -43.11 + (Math.random() - 0.5) * 0.02 };
+    let boundary: any = null;
 
     try {
       const query = encodeURIComponent(`${newArea.neighborhood}, ${newArea.city}, ${newArea.uf}, Brasil`);
@@ -456,19 +557,28 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       
       if (data && data.length > 0) {
         center = { lat: parseFloat(data[0].lat), lng: parseFloat(data[0].lon) };
-        boundary = data[0].geojson;
+        if (data[0].geojson && (data[0].geojson.type === 'Polygon' || data[0].geojson.type === 'MultiPolygon')) {
+          boundary = data[0].geojson;
+        } else {
+          boundary = createCirclePolygon(center.lat, center.lng, 1.2);
+        }
+      } else {
+        boundary = createCirclePolygon(center.lat, center.lng, 1.2);
       }
     } catch (err) {
       console.error('Geocoding failed, using fallback:', err);
+      boundary = createCirclePolygon(center.lat, center.lng, 1.2);
     } finally {
+      const newId = Math.random().toString(36).substr(2, 9);
       onUpdateCoverage([...coverageAreas, {
-        id: Math.random().toString(36).substr(2, 9),
+        id: newId,
         neighborhood: newArea.neighborhood,
         city: newArea.city,
         allowedCeps: [],
         center,
         boundary
       }]);
+      setSelectedCoverageAreaId(newId);
       
       setNewArea({ ...newArea, neighborhood: '' });
       setIsGeocoding(false);
@@ -658,10 +768,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      {/* Sidebar */}
-      <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col sticky top-0 h-screen">
-        <div className="px-6 py-5 border-b border-slate-800/80 mb-2">
+    <div className="h-full w-full bg-slate-50 flex overflow-hidden">
+      {/* Sidebar - Fixa e blindada contra o scroll da página */}
+      <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col h-full shrink-0 border-r border-slate-800/80 z-30 select-none">
+        <div className="px-6 py-5 border-b border-slate-800/80 mb-2 shrink-0">
           <div className="flex items-center gap-2.5">
             <div className="w-2.5 h-2.5 rounded-full bg-yellow-400 animate-pulse"></div>
             <span className="text-[11px] font-black uppercase tracking-widest text-slate-300">
@@ -671,7 +781,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           <p className="text-[11px] text-slate-500 mt-0.5 font-medium">Controle operacional</p>
         </div>
 
-        <nav className="flex-1 px-4 space-y-2 overflow-y-auto">
+        <nav className="flex-1 px-4 py-2 space-y-1.5 overflow-y-auto custom-scrollbar">
           {(user.role === 'gestor' || user.allowedTabs?.includes('dashboard')) && (
             <button 
               onClick={() => setActiveTab('dashboard')} 
@@ -746,9 +856,9 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
         </nav>
 
-        <div className="p-4 border-t border-slate-800 space-y-2">
+        <div className="p-4 border-t border-slate-800 shrink-0 space-y-2 bg-slate-900">
           <div className="flex items-center gap-3 p-3 bg-slate-800 rounded-2xl">
-            <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center">
+            <div className="w-10 h-10 bg-slate-700 rounded-full flex items-center justify-center shrink-0">
               <User className="text-slate-400 w-5 h-5" />
             </div>
             <div className="overflow-hidden flex-1">
@@ -769,10 +879,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
         </div>
       </aside>
 
-      {/* Main Content */}
-      <main className="flex-1 pb-20">
+      {/* Main Content - Área de conteúdo com scroll vertical independente */}
+      <main className={`flex-1 h-full overflow-y-auto bg-slate-50 custom-scrollbar ${(activeTab === 'dashboard' || activeTab === 'benefits') ? 'pb-2 lg:overflow-hidden' : 'pb-20'}`}>
         {/* Mobile Tab Bar */}
-        <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between sticky top-[57px] z-30 overflow-x-auto shadow-sm">
+        <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between sticky top-0 z-30 overflow-x-auto shadow-sm">
           <div className="flex items-center gap-2">
             {(user.role === 'gestor' || user.allowedTabs?.includes('dashboard')) && <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Métricas"><LayoutDashboard className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('tracking')) && <button onClick={() => setActiveTab('tracking')} className={`p-2 rounded-xl transition-all ${activeTab === 'tracking' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Acompanhamento"><Clock className="w-5 h-5" /></button>}
@@ -784,70 +894,36 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           </div>
         </div>
 
-        <div className="p-6 lg:p-10 max-w-6xl mx-auto">
-          <header className="hidden md:flex items-center justify-between mb-10">
-            <div>
-              <h2 className="text-3xl font-black text-slate-900">
-                {activeTab === 'dashboard' && "Visão Geral"}
-                {activeTab === 'tracking' && "Acompanhamento de Pedidos"}
-                {activeTab === 'orders' && "Gestão de Pedidos"}
-                {activeTab === 'map' && "Mapa de Entregas"}
-                {activeTab === 'coverage' && "Área de Cobertura"}
-                {activeTab === 'benefits' && "Gestão de Benefícios & Cupons"}
-                {activeTab === 'predictions' && "Previsão de Consumo"}
-                {activeTab === 'collaborators' && "Gestão de Colaboradores"}
-                {activeTab === 'meu_negocio' && "Meu Negócio & Estabelecimento"}
-              </h2>
-              <p className="text-slate-500 font-medium">
-                {activeTab === 'meu_negocio' ? "Gerencie horários de atendimento, logotipo e dados da sua empresa." : "Acompanhe o desempenho da sua revenda em tempo real."}
-              </p>
-            </div>
-          </header>
+        <div className={(activeTab === 'dashboard' || activeTab === 'benefits') ? "p-3 lg:px-6 lg:py-2.5 w-full" : "p-6 lg:p-10 max-w-6xl mx-auto"}>
+          {activeTab !== 'dashboard' && activeTab !== 'benefits' && (
+            <header className="hidden md:flex items-center justify-between mb-10">
+              <div>
+                <h2 className="text-3xl font-black text-slate-900">
+                  {activeTab === 'tracking' && "Acompanhamento de Pedidos"}
+                  {activeTab === 'orders' && "Gestão de Pedidos"}
+                  {activeTab === 'map' && "Mapa de Entregas"}
+                  {activeTab === 'coverage' && "Área de Cobertura"}
+                  {activeTab === 'predictions' && "Previsão de Consumo"}
+                  {activeTab === 'collaborators' && "Gestão de Colaboradores"}
+                  {activeTab === 'meu_negocio' && "Meu Negócio & Estabelecimento"}
+                </h2>
+                <p className="text-slate-500 font-medium">
+                  {activeTab === 'meu_negocio' ? "Gerencie horários de atendimento, logotipo e dados da sua empresa." : "Acompanhe o desempenho da sua revenda em tempo real."}
+                </p>
+              </div>
+            </header>
+          )}
 
         <AnimatePresence mode="wait">
           {activeTab === 'dashboard' && (
-            <motion.div key="dashboard" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="bg-green-100 w-10 h-10 rounded-2xl flex items-center justify-center mb-4"><DollarSign className="text-green-600 w-5 h-5" /></div>
-                  <p className="text-xs font-bold text-slate-400 uppercase mb-1">Receita Total</p>
-                  <p className="text-2xl font-black text-slate-900">R$ {totalRevenue.toFixed(2)}</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="bg-red-100 w-10 h-10 rounded-2xl flex items-center justify-center mb-4"><ArrowDownRight className="text-red-600 w-5 h-5" /></div>
-                  <p className="text-xs font-bold text-slate-400 uppercase mb-1">Despesas</p>
-                  <p className="text-2xl font-black text-slate-900">R$ {totalExpenses.toFixed(2)}</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="bg-blue-100 w-10 h-10 rounded-2xl flex items-center justify-center mb-4"><TrendingUp className="text-blue-600 w-5 h-5" /></div>
-                  <p className="text-xs font-bold text-slate-400 uppercase mb-1">Lucro Líquido</p>
-                  <p className="text-2xl font-black text-slate-900">R$ {netProfit.toFixed(2)}</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="bg-yellow-100 w-10 h-10 rounded-2xl flex items-center justify-center mb-4"><Package className="text-yellow-600 w-5 h-5" /></div>
-                  <p className="text-xs font-bold text-slate-400 uppercase mb-1">Qtd. Vendida</p>
-                  <p className="text-2xl font-black text-slate-900">{totalQty} un</p>
-                </div>
-              </div>
-
-              <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-                <h3 className="font-black text-lg mb-6">Resumo de Vendas por Produto</h3>
-                <div className="space-y-4">
-                  {PRODUCTS.map(p => {
-                    const qty = orders.filter(o => o.status === 'Concluído').reduce((acc, o) => acc + o.items.filter(i => i.productId === p.id).reduce((sum, i) => sum + i.quantity, 0), 0);
-                    return (
-                      <div key={p.id} className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <img src={p.image} className="w-10 h-10 rounded-xl object-cover" referrerPolicy="no-referrer" />
-                          <span className="font-bold text-sm">{p.name}</span>
-                        </div>
-                        <span className="font-black text-slate-900">{qty} un</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </motion.div>
+            <DashboardMetricsTab
+              orders={orders}
+              deliveryPersons={deliveryPersons}
+              expenses={expenses}
+              coverageAreas={coverageAreas}
+              businessInfo={businessInfo}
+              onSelectOrder={setSelectedOrderDetails}
+            />
           )}
 
           {activeTab === 'tracking' && (() => {
@@ -1591,73 +1667,199 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 {/* List of areas */}
                 <div className="w-full">
                   <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                    <div className="flex justify-between items-center mb-6">
-                      <h3 className="font-black text-lg">Bairros Atendidos</h3>
-                      <button 
-                        onClick={() => setIsAddingCoverage(true)}
-                        className="bg-yellow-400 p-2 rounded-xl text-slate-900 hover:bg-yellow-500 transition-colors"
-                      >
-                        <Plus className="w-5 h-5" />
-                      </button>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-                      {coverageAreas.map(area => (
-                        <div key={area.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 relative">
-                          <button 
-                            onClick={() => setAreaToDelete(area.id)}
-                            className="absolute top-2 right-2 bg-red-50 text-red-500 p-2 rounded-xl hover:bg-red-100 transition-colors"
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-6">
+                      <div>
+                        <h3 className="font-black text-lg text-slate-900">Bairros Atendidos</h3>
+                        <p className="text-xs text-slate-500 font-medium">
+                          Clique em um bairro para destacar e dar zoom automático no mapa.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {selectedCoverageAreaId && (
+                          <button
+                            onClick={() => setSelectedCoverageAreaId(null)}
+                            className="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold px-3 py-2 rounded-xl transition-all flex items-center gap-1.5"
                           >
-                            <X className="w-4 h-4" />
+                            <RotateCw className="w-3.5 h-3.5" /> Ver Todos os Bairros
                           </button>
-                          <p className="font-bold text-slate-900">{area.neighborhood}</p>
-                          <p className="text-[10px] text-slate-500">{area.city}</p>
-                        </div>
-                      ))}
+                        )}
+                        <button 
+                          onClick={() => setIsAddingCoverage(true)}
+                          className="bg-yellow-400 p-2.5 rounded-xl text-slate-900 hover:bg-yellow-500 transition-colors flex items-center gap-1.5 text-xs font-black shadow-sm"
+                          title="Adicionar Novo Bairro"
+                        >
+                          <Plus className="w-4 h-4" /> <span>Adicionar Bairro</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                      {coverageAreas.map(area => {
+                        const isSelected = selectedCoverageAreaId === area.id;
+                        return (
+                          <div 
+                            key={area.id} 
+                            onClick={() => setSelectedCoverageAreaId(prev => prev === area.id ? null : area.id)}
+                            className={`p-4 rounded-2xl border transition-all relative cursor-pointer select-none ${
+                              isSelected
+                                ? 'bg-yellow-50 border-2 border-yellow-400 ring-4 ring-yellow-400/20 shadow-md'
+                                : 'bg-slate-50 border-slate-100 hover:border-yellow-300 hover:bg-yellow-50/30'
+                            }`}
+                          >
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setAreaToDelete(area.id);
+                              }}
+                              title="Remover Bairro"
+                              className="absolute top-2.5 right-2.5 bg-red-50 text-red-500 p-1.5 rounded-xl hover:bg-red-100 transition-colors z-10"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                            <div className="flex items-center gap-2 pr-6">
+                              <span className={`w-2.5 h-2.5 rounded-full transition-all shrink-0 ${
+                                isSelected ? 'bg-yellow-500 scale-125 animate-pulse' : 'bg-slate-300'
+                              }`} />
+                              <p className="font-black text-slate-900 text-sm truncate">{area.neighborhood}</p>
+                            </div>
+                            <p className="text-[11px] text-slate-500 font-semibold mt-1 ml-4.5">{area.city}</p>
+                            {isSelected ? (
+                              <div className="mt-2.5 pt-2 border-t border-yellow-200/80 flex items-center justify-between text-[10px] text-yellow-900 font-black">
+                                <span>📍 Focado no mapa</span>
+                                <span className="bg-yellow-300/80 text-yellow-950 px-1.5 py-0.5 rounded text-[9px]">Ativo</span>
+                              </div>
+                            ) : (
+                              <div className="mt-2 pt-2 border-t border-slate-100 text-[10px] text-slate-400 font-semibold">
+                                Clique para focar
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
 
                 {/* Map Visualization */}
                 <div className="w-full">
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full min-h-[500px] flex flex-col">
-                    <h3 className="font-black text-lg mb-6 flex items-center gap-2">
-                      <MapIcon className="text-yellow-500 w-5 h-5" /> Visualização Geográfica
-                    </h3>
-                    <div className="relative bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 z-0 isolate" style={{ height: '450px' }}>
-                      <MapContainer center={[-22.825, -43.055]} zoom={13} style={{ height: '450px', width: '100%' }}>
+                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 h-full min-h-[520px] flex flex-col">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-4">
+                      <h3 className="font-black text-lg flex items-center gap-2 text-slate-900">
+                        <MapIcon className="text-yellow-500 w-5 h-5" /> Visualização Geográfica
+                      </h3>
+                      {selectedCoverageAreaId && (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-yellow-900 bg-yellow-100 px-3 py-1 rounded-full border border-yellow-200 flex items-center gap-1.5">
+                            <span className="w-2 h-2 rounded-full bg-yellow-500 animate-ping" />
+                            Bairro Pintado: {coverageAreas.find(a => a.id === selectedCoverageAreaId)?.neighborhood}
+                          </span>
+                          <button
+                            onClick={() => setSelectedCoverageAreaId(null)}
+                            className="text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200"
+                          >
+                            ✕ Ver Todos
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="relative bg-slate-100 rounded-2xl overflow-hidden border border-slate-200 z-0 isolate" style={{ height: '480px' }}>
+                      <MapContainer center={[-22.905, -43.11]} zoom={13} style={{ height: '480px', width: '100%' }}>
                         <TileLayer
                           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
                           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                         />
-                        {coverageAreas.map(area => (
-                          <React.Fragment key={area.id}>
-                            {area.boundary ? (
-                              <GeoJSON 
-                                key={`boundary-${area.id}-${area.neighborhood}`}
-                                data={area.boundary}
-                                style={{
-                                  fillColor: '#facc15',
-                                  weight: 2,
-                                  opacity: 1,
-                                  color: '#eab308',
-                                  fillOpacity: 0.3
-                                }}
-                              />
-                            ) : area.center && (
-                              <Marker position={[area.center.lat, area.center.lng]}>
-                                <Popup>
-                                  <div className="font-bold">{area.neighborhood}</div>
-                                  <div className="text-xs">{area.city}</div>
-                                </Popup>
-                              </Marker>
-                            )}
-                          </React.Fragment>
-                        ))}
+                        <CoverageMapController 
+                          selectedArea={coverageAreas.find(a => a.id === selectedCoverageAreaId)}
+                          coverageAreas={coverageAreas}
+                        />
+                        {coverageAreas.map(area => {
+                          const isSelected = selectedCoverageAreaId === area.id;
+                          const hasSelectedOther = selectedCoverageAreaId !== null && !isSelected;
+                          
+                          // Estilo dinâmico:
+                          // - Selecionado: ouro vibrante com borda reforçada e opacidade alta
+                          // - Nenhum selecionado (Visão geral): amarelo harmonioso
+                          // - Outro bairro selecionado: atenuado suavemente
+                          const polyStyle = isSelected
+                            ? {
+                                fillColor: '#eab308',
+                                weight: 3.5,
+                                opacity: 1,
+                                color: '#a16207',
+                                fillOpacity: 0.65
+                              }
+                            : hasSelectedOther
+                            ? {
+                                fillColor: '#facc15',
+                                weight: 1.5,
+                                opacity: 0.6,
+                                color: '#94a3b8',
+                                fillOpacity: 0.15,
+                                dashArray: '4'
+                              }
+                            : {
+                                fillColor: '#facc15',
+                                weight: 2,
+                                opacity: 1,
+                                color: '#ca8a04',
+                                fillOpacity: 0.35
+                              };
+
+                          const boundaryData = area.boundary || (area.center ? createCirclePolygon(area.center.lat, area.center.lng, 1.2) : null);
+
+                          if (!boundaryData) return null;
+
+                          return (
+                            <GeoJSON 
+                              key={`boundary-${area.id}-${selectedCoverageAreaId === area.id ? 'active' : 'idle'}`}
+                              data={boundaryData}
+                              style={polyStyle}
+                              eventHandlers={{
+                                click: () => setSelectedCoverageAreaId(prev => prev === area.id ? null : area.id)
+                              }}
+                            >
+                              <Popup>
+                                <div className="p-1 min-w-[140px]">
+                                  <div className="font-black text-sm text-slate-900">{area.neighborhood}</div>
+                                  <div className="text-xs text-slate-500 font-semibold">{area.city}</div>
+                                  <div className="mt-2 text-[10px] text-yellow-800 font-black bg-yellow-50 px-2 py-0.5 rounded border border-yellow-200 inline-block">
+                                    {isSelected ? '✓ Bairro em foco' : 'Clique para focar'}
+                                  </div>
+                                </div>
+                              </Popup>
+                            </GeoJSON>
+                          );
+                        })}
                       </MapContainer>
+
+                      {/* Floating status card no canto inferior esquerdo */}
+                      <div className="absolute bottom-4 left-4 bg-white/95 backdrop-blur-sm p-3 rounded-2xl shadow-lg border border-slate-200 z-[1000] flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-yellow-400/20 text-yellow-600 flex items-center justify-center font-black">
+                          📍
+                        </div>
+                        <div>
+                          <p className="text-[10px] font-black uppercase text-slate-400">Status da Cobertura</p>
+                          <p className="text-xs font-black text-slate-800">
+                            {selectedCoverageAreaId 
+                              ? `Foco: ${coverageAreas.find(a => a.id === selectedCoverageAreaId)?.neighborhood} (Pintado)`
+                              : `${coverageAreas.length} Bairros Atendidos (Pintados)`}
+                          </p>
+                        </div>
+                        {selectedCoverageAreaId && (
+                          <button
+                            onClick={() => setSelectedCoverageAreaId(null)}
+                            className="ml-2 text-[11px] font-black text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition-colors"
+                          >
+                            Ver Todos
+                          </button>
+                        )}
+                      </div>
+
                       <div className="absolute bottom-4 right-4 bg-white/90 backdrop-blur-sm p-3 rounded-xl shadow-lg border border-slate-200 z-[1000] max-w-[200px]">
                         <p className="text-[10px] font-black text-slate-400 uppercase mb-1">Nota de Cobertura</p>
                         <p className="text-[9px] text-slate-600 leading-tight">
-                          Os círculos são <strong>ilustrativos</strong>. A validação real é feita pelo <strong>nome oficial do bairro</strong> retornado pelo CEP do cliente.
+                          Áreas <strong>pintadas</strong> representam o polígono oficial atendido. Validação do cliente é feita pelo CEP.
                         </p>
                       </div>
                     </div>
@@ -1668,350 +1870,410 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
 
           {activeTab === 'benefits' && (
-            <motion.div key="benefits" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <div className="flex flex-wrap gap-2 mb-2">
-                <button 
-                  onClick={() => setBenefitSubTab('settings')}
-                  className={`px-5 py-2.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 ${benefitSubTab === 'settings' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 hover:text-slate-800 border border-slate-100'}`}
-                >
-                  <Gift className="w-3.5 h-3.5 text-yellow-400" /> REGRAS & VALORES
-                </button>
-                <button 
-                  onClick={() => setBenefitSubTab('rewards')}
-                  className={`px-5 py-2.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 ${benefitSubTab === 'rewards' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 hover:text-slate-800 border border-slate-100'}`}
-                >
-                  <Star className="w-3.5 h-3.5 text-yellow-400" /> RECOMPENSAS ({rewards.length})
-                </button>
-                <button 
-                  onClick={() => setBenefitSubTab('coupons')}
-                  className={`px-5 py-2.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 ${benefitSubTab === 'coupons' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 hover:text-slate-800 border border-slate-100'}`}
-                >
-                  <Ticket className="w-3.5 h-3.5 text-yellow-400" /> CUPONS ({coupons.length})
-                </button>
-                <button 
-                  onClick={() => setBenefitSubTab('referrals')}
-                  className={`px-5 py-2.5 rounded-xl font-black text-xs transition-all flex items-center gap-1.5 ${benefitSubTab === 'referrals' ? 'bg-slate-900 text-white shadow-lg' : 'bg-white text-slate-500 hover:text-slate-800 border border-slate-100'}`}
-                >
-                  <Users className="w-3.5 h-3.5 text-yellow-400" /> INDICAÇÕES ({referrals.length})
-                </button>
-              </div>
+            <motion.div key="benefits" initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="space-y-4 w-full">
+              {/* Barra de Topo Unificada da Aba de Benefícios */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white px-5 py-3 rounded-2xl border border-slate-100 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-yellow-400/20 text-yellow-700 flex items-center justify-center font-black shadow-sm">
+                    <Gift className="w-5 h-5 text-yellow-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-slate-900 text-base leading-tight">
+                      Gestão de Benefícios & Fidelidade
+                    </h3>
+                    <p className="text-xs text-slate-400 font-bold">
+                      {benefitSubTab === 'settings' && 'Parâmetros de pontuação, descontos e regras de indicação'}
+                      {benefitSubTab === 'rewards' && `${rewards.length} recompensas cadastradas no catálogo`}
+                      {benefitSubTab === 'coupons' && `${coupons.length} cupons promocionais disponíveis para a loja`}
+                      {benefitSubTab === 'referrals' && `${referrals.length} indicações de clientes registradas`}
+                    </p>
+                  </div>
+                </div>
 
-              {/* SUBTAB 1: REGRAS & VALORES CONFIGURÁVEIS */}
-              {benefitSubTab === 'settings' && (
-                <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-100 max-w-4xl">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-8 pb-6 border-b border-slate-100">
-                    <div>
-                      <h3 className="font-black text-xl text-slate-900 flex items-center gap-2">
-                        <Gift className="text-yellow-500 w-6 h-6" /> Parâmetros do Programa de Benefícios
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Ajuste os valores de desconto de indicação, bônus para quem indicou e multiplicador de pontos em tempo real.
-                      </p>
-                    </div>
-                    {configSavedToast && (
-                      <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-black px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm animate-pulse">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Salvo com sucesso!
-                      </span>
-                    )}
+                {/* Sub-abas Pills e Ação Rápida */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
+                    <button 
+                      onClick={() => setBenefitSubTab('settings')}
+                      className={`px-3.5 py-1.5 rounded-lg font-black transition-all flex items-center gap-1.5 ${benefitSubTab === 'settings' ? 'bg-yellow-400 text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      <Gift className="w-3.5 h-3.5" /> Regras & Valores
+                    </button>
+                    <button 
+                      onClick={() => setBenefitSubTab('rewards')}
+                      className={`px-3.5 py-1.5 rounded-lg font-black transition-all flex items-center gap-1.5 ${benefitSubTab === 'rewards' ? 'bg-yellow-400 text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      <Star className="w-3.5 h-3.5" /> Recompensas ({rewards.length})
+                    </button>
+                    <button 
+                      onClick={() => setBenefitSubTab('coupons')}
+                      className={`px-3.5 py-1.5 rounded-lg font-black transition-all flex items-center gap-1.5 ${benefitSubTab === 'coupons' ? 'bg-yellow-400 text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      <Ticket className="w-3.5 h-3.5" /> Cupons ({coupons.length})
+                    </button>
+                    <button 
+                      onClick={() => setBenefitSubTab('referrals')}
+                      className={`px-3.5 py-1.5 rounded-lg font-black transition-all flex items-center gap-1.5 ${benefitSubTab === 'referrals' ? 'bg-yellow-400 text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-900'}`}
+                    >
+                      <Users className="w-3.5 h-3.5" /> Indicações ({referrals.length})
+                    </button>
                   </div>
 
-                  <form onSubmit={(e) => {
-                    e.preventDefault();
-                    onUpdateBenefitsConfig(configForm);
-                    setConfigSavedToast(true);
-                    setTimeout(() => setConfigSavedToast(false), 3000);
-                  }} className="space-y-6">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                      
-                      {/* Campo 1: Desconto do Amigo Indicado */}
-                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-black text-slate-900 uppercase tracking-wide">
-                            Desconto do Amigo Indicado (1º Pedido)
-                          </label>
-                          <span className="bg-yellow-100 text-yellow-800 text-[10px] font-black px-2 py-0.5 rounded">R$ DESCONTO</span>
+                  {benefitSubTab === 'rewards' && (
+                    <button 
+                      onClick={() => {
+                        setEditingRewardId(null);
+                        setRewardForm({
+                          title: '',
+                          description: '',
+                          pointsCost: 200,
+                          type: 'discount',
+                          productId: '',
+                          value: 10,
+                          validityDays: 30,
+                          minOrderValue: 0,
+                          rulesText: 'Válido para 1 pedido\nNão cumulativo com outras promoções',
+                          isActive: true
+                        });
+                        setIsRewardModalOpen(true);
+                      }}
+                      className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 px-4 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 stroke-[3]" /> NOVA RECOMPENSA
+                    </button>
+                  )}
+
+                  {benefitSubTab === 'coupons' && (
+                    <button 
+                      onClick={() => setIsAddingCoupon(true)}
+                      className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 px-4 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5 stroke-[3]" /> NOVO CUPOM
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* SUBTAB 1: REGRAS & VALORES CONFIGURÁVEIS (CARDS ALTOS E SEM CABEÇALHO INTERNO) */}
+              {benefitSubTab === 'settings' && (
+                <form onSubmit={(e) => {
+                  e.preventDefault();
+                  onUpdateBenefitsConfig(configForm);
+                  setConfigSavedToast(true);
+                  setTimeout(() => setConfigSavedToast(false), 3000);
+                }} className="space-y-4 w-full">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    
+                    {/* Card 1: Desconto Amigo Indicado */}
+                    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-sm border border-slate-100 min-h-[340px] flex flex-col justify-between hover:border-yellow-400/60 transition-all group">
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="w-10 h-10 rounded-2xl bg-yellow-400/20 text-yellow-700 flex items-center justify-center font-black">
+                            <Gift className="w-5 h-5 text-yellow-600" />
+                          </span>
+                          <span className="bg-yellow-100 text-yellow-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                            R$ Desconto
+                          </span>
                         </div>
-                        <p className="text-[11px] text-slate-500">
-                          Valor em Reais concedido como cupom de boas-vindas no 1º pedido do amigo que usou o link ou código.
+                        <h4 className="font-black text-slate-900 text-base mb-1.5">
+                          Desconto Amigo Indicado
+                        </h4>
+                        <p className="text-xs text-slate-400 font-medium leading-relaxed mb-4">
+                          Valor concedido como cupom de boas-vindas no 1º pedido do amigo indicado.
                         </p>
-                        <div className="relative">
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">R$</span>
+                      </div>
+
+                      <div>
+                        <div className="relative mb-3">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-lg">R$</span>
                           <input 
                             type="number"
                             min="0"
                             step="0.5"
                             value={configForm.referralDiscountValue}
                             onChange={(e) => setConfigForm({ ...configForm, referralDiscountValue: parseFloat(e.target.value) || 0 })}
-                            className="w-full pl-11 pr-4 py-3.5 bg-white rounded-xl border border-slate-200 font-black text-slate-900 text-base focus:ring-2 focus:ring-yellow-400 outline-none"
+                            className="w-full pl-12 pr-4 py-4 bg-slate-50 rounded-2xl border border-slate-200 font-black text-slate-900 text-2xl focus:ring-2 focus:ring-yellow-400 outline-none shadow-sm transition-all focus:bg-white"
                             required
                           />
                         </div>
+                        <div className="bg-amber-50/70 border border-amber-200/60 rounded-xl px-3 py-2 text-[11px] text-amber-900 font-bold">
+                          💡 O amigo recebe R$ {(configForm.referralDiscountValue || 0).toFixed(2)} de desconto na 1ª compra.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 2: Bônus de Pontos para o Indicador */}
+                    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-sm border border-slate-100 min-h-[340px] flex flex-col justify-between hover:border-yellow-400/60 transition-all group">
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="w-10 h-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center font-black">
+                            <Star className="w-5 h-5 text-amber-600" />
+                          </span>
+                          <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                            Pontos
+                          </span>
+                        </div>
+                        <h4 className="font-black text-slate-900 text-base mb-1.5">
+                          Bônus do Indicador
+                        </h4>
+                        <p className="text-xs text-slate-400 font-medium leading-relaxed mb-4">
+                          Pontos concedidos a quem indicou assim que a 1ª compra do amigo for concluída.
+                        </p>
                       </div>
 
-                      {/* Campo 2: Bônus de Pontos para o Indicador */}
-                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-black text-slate-900 uppercase tracking-wide">
-                            Bônus para o Indicador (por Compra)
-                          </label>
-                          <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded">PONTOS</span>
-                        </div>
-                        <p className="text-[11px] text-slate-500">
-                          Quantidade de pontos concedida ao indicador assim que a 1ª compra do amigo for concluída.
-                        </p>
-                        <div className="relative">
+                      <div>
+                        <div className="relative mb-3">
                           <input 
                             type="number"
                             min="0"
                             step="5"
                             value={configForm.referralPointsAwarded}
                             onChange={(e) => setConfigForm({ ...configForm, referralPointsAwarded: parseInt(e.target.value) || 0 })}
-                            className="w-full px-4 py-3.5 bg-white rounded-xl border border-slate-200 font-black text-slate-900 text-base focus:ring-2 focus:ring-yellow-400 outline-none"
+                            className="w-full pl-4 pr-16 py-4 bg-slate-50 rounded-2xl border border-slate-200 font-black text-slate-900 text-2xl focus:ring-2 focus:ring-yellow-400 outline-none shadow-sm transition-all focus:bg-white"
                             required
                           />
                           <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">pontos</span>
                         </div>
+                        <div className="bg-amber-50/70 border border-amber-200/60 rounded-xl px-3 py-2 text-[11px] text-amber-900 font-bold">
+                          ⭐ O indicador ganha +{configForm.referralPointsAwarded || 0} pts no saldo dele.
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Card 3: Pontos por Real Gasto */}
+                    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-sm border border-slate-100 min-h-[340px] flex flex-col justify-between hover:border-yellow-400/60 transition-all group">
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="w-10 h-10 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center font-black">
+                            <TrendingUp className="w-5 h-5 text-blue-600" />
+                          </span>
+                          <span className="bg-blue-100 text-blue-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                            Multiplicador
+                          </span>
+                        </div>
+                        <h4 className="font-black text-slate-900 text-base mb-1.5">
+                          Pontos por R$ 1,00
+                        </h4>
+                        <p className="text-xs text-slate-400 font-medium leading-relaxed mb-4">
+                          Multiplicador de pontos para compras normais (ex: 10 pts = R$ 100 geram 1.000 pts).
+                        </p>
                       </div>
 
-                      {/* Campo 3: Pontos por Real Gasto */}
-                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-black text-slate-900 uppercase tracking-wide">
-                            Fidelidade: Pontos por R$ 1,00 gasto
-                          </label>
-                          <span className="bg-blue-100 text-blue-800 text-[10px] font-black px-2 py-0.5 rounded">MULTIPLICADOR</span>
-                        </div>
-                        <p className="text-[11px] text-slate-500">
-                          Multiplicador de pontos para compras normais concluídas (ex: 10 pts = R$ 100 geram 1.000 pts).
-                        </p>
-                        <div className="relative">
+                      <div>
+                        <div className="relative mb-3">
                           <input 
                             type="number"
                             min="1"
                             step="1"
                             value={configForm.pointsPerCurrency}
                             onChange={(e) => setConfigForm({ ...configForm, pointsPerCurrency: parseFloat(e.target.value) || 1 })}
-                            className="w-full px-4 py-3.5 bg-white rounded-xl border border-slate-200 font-black text-slate-900 text-base focus:ring-2 focus:ring-yellow-400 outline-none"
+                            className="w-full pl-4 pr-24 py-4 bg-slate-50 rounded-2xl border border-slate-200 font-black text-slate-900 text-2xl focus:ring-2 focus:ring-yellow-400 outline-none shadow-sm transition-all focus:bg-white"
                             required
                           />
-                          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">pts / R$ 1,00</span>
+                          <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">pts / R$ 1</span>
+                        </div>
+                        <div className="bg-blue-50/70 border border-blue-200/60 rounded-xl px-3 py-2 text-[11px] text-blue-900 font-bold">
+                          🛒 Um botijão de R$ 100 gera {Math.round((configForm.pointsPerCurrency || 1) * 100)} pontos.
                         </div>
                       </div>
+                    </div>
 
-                      {/* Campo 4: Pedido Mínimo para Indicação */}
-                      <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-xs font-black text-slate-900 uppercase tracking-wide">
-                            Pedido Mínimo para Cupom de Indicação
-                          </label>
-                          <span className="bg-purple-100 text-purple-800 text-[10px] font-black px-2 py-0.5 rounded">CONDICIONAL</span>
+                    {/* Card 4: Pedido Mínimo para Indicação */}
+                    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-sm border border-slate-100 min-h-[340px] flex flex-col justify-between hover:border-yellow-400/60 transition-all group">
+                      <div>
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="w-10 h-10 rounded-2xl bg-purple-100 text-purple-700 flex items-center justify-center font-black">
+                            <DollarSign className="w-5 h-5 text-purple-600" />
+                          </span>
+                          <span className="bg-purple-100 text-purple-800 text-[10px] font-black px-2.5 py-1 rounded-lg uppercase">
+                            Condicional
+                          </span>
                         </div>
-                        <p className="text-[11px] text-slate-500">
-                          Valor mínimo de compra para que o desconto de indicação possa ser aplicado (0 = sem mínimo).
+                        <h4 className="font-black text-slate-900 text-base mb-1.5">
+                          Pedido Mínimo Indicação
+                        </h4>
+                        <p className="text-xs text-slate-400 font-medium leading-relaxed mb-4">
+                          Valor mínimo de compra para que o desconto de indicação possa ser aplicado (0 = livre).
                         </p>
-                        <div className="relative">
-                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-sm">R$</span>
+                      </div>
+
+                      <div>
+                        <div className="relative mb-3">
+                          <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 font-black text-lg">R$</span>
                           <input 
                             type="number"
                             min="0"
                             step="5"
                             value={configForm.referralMinOrderValue || 0}
                             onChange={(e) => setConfigForm({ ...configForm, referralMinOrderValue: parseFloat(e.target.value) || 0 })}
-                            className="w-full pl-11 pr-4 py-3.5 bg-white rounded-xl border border-slate-200 font-black text-slate-900 text-base focus:ring-2 focus:ring-yellow-400 outline-none"
+                            className="w-full pl-12 pr-4 py-4 bg-slate-50 rounded-2xl border border-slate-200 font-black text-slate-900 text-2xl focus:ring-2 focus:ring-yellow-400 outline-none shadow-sm transition-all focus:bg-white"
                           />
                         </div>
+                        <div className="bg-purple-50/70 border border-purple-200/60 rounded-xl px-3 py-2 text-[11px] text-purple-900 font-bold">
+                          {configForm.referralMinOrderValue && configForm.referralMinOrderValue > 0 
+                            ? `🔒 O cupom só valida em pedidos acima de R$ ${configForm.referralMinOrderValue.toFixed(2)}.`
+                            : '🔓 Sem restrição de pedido mínimo para o cupom.'}
+                        </div>
                       </div>
                     </div>
 
-                    <div className="pt-4 flex justify-end">
+                  </div>
+
+                  {/* Barra de Ação Inferior */}
+                  <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white p-4 sm:px-6 rounded-2xl border border-slate-100 shadow-sm">
+                    <div className="flex items-center gap-2 text-xs text-slate-400 font-bold">
+                      <Clock className="w-4 h-4 text-slate-400" />
+                      <span>Todas as alterações refletem imediatamente na loja e no app dos clientes.</span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {configSavedToast && (
+                        <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-black px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm animate-pulse">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" /> Salvo com sucesso!
+                        </span>
+                      )}
                       <button
                         type="submit"
-                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-black text-sm px-8 py-4 rounded-2xl shadow-lg shadow-yellow-400/20 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
+                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-black text-xs sm:text-sm px-6 py-3 rounded-xl shadow-md shadow-yellow-400/20 active:scale-95 transition-all flex items-center gap-2 cursor-pointer"
                       >
-                        <CheckCircle2 className="w-5 h-5 stroke-[2.5]" /> SALVAR CONFIGURAÇÕES DE BENEFÍCIOS
+                        <CheckCircle2 className="w-4 h-4 stroke-[2.5]" /> SALVAR PARÂMETROS DE BENEFÍCIOS
                       </button>
                     </div>
-                  </form>
-                </div>
+                  </div>
+                </form>
               )}
 
-              {/* SUBTAB 2: GESTÃO DE RECOMPENSAS DO CATÁLOGO */}
+              {/* SUBTAB 2: GESTÃO DE RECOMPENSAS DO CATÁLOGO (CARDS DIRETOS E ALTOS) */}
               {benefitSubTab === 'rewards' && (
-                <div className="space-y-6">
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-                      <div>
-                        <h3 className="font-black text-lg flex items-center gap-2">
-                          <Star className="text-yellow-500 w-5 h-5" /> Catálogo de Troca de Pontos
-                        </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">Gerencie os itens, descontos e brindes disponíveis para resgate pelos clientes.</p>
+                <div className="space-y-4 w-full">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                    {rewards.map(reward => (
+                      <div key={reward.id} className="bg-white p-6 rounded-3xl border border-slate-100 flex flex-col justify-between min-h-[320px] relative overflow-hidden group hover:border-yellow-400/70 transition-all shadow-sm">
+                        <div className={`absolute top-0 right-0 w-2.5 h-full ${reward.isActive !== false ? 'bg-emerald-400' : 'bg-slate-300'}`}></div>
+                        <div>
+                          <div className="flex justify-between items-start mb-3 pr-3">
+                            <span className="bg-yellow-400 text-slate-950 text-xs font-black px-3 py-1 rounded-xl shadow-sm">
+                              {reward.pointsCost} PTS
+                            </span>
+                            <span className={`text-[10px] font-black px-2 py-0.5 rounded ${reward.isActive !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
+                              {reward.isActive !== false ? 'ATIVO' : 'INATIVO'}
+                            </span>
+                          </div>
+                          <h4 className="font-black text-slate-900 text-base mb-1">{reward.title}</h4>
+                          <p className="text-xs text-slate-500 mb-3 leading-relaxed">{reward.description}</p>
+                          
+                          <div className="space-y-1.5 text-[11px] text-slate-600 font-medium bg-slate-50 p-3.5 rounded-2xl border border-slate-100 mb-3">
+                            <p><strong>Tipo:</strong> {reward.type === 'discount' ? 'Desconto em R$' : (reward.type === 'free_item' || reward.type === 'free_product') ? 'Brinde / Produto Grátis' : 'Cashback'}</p>
+                            {reward.productId && (
+                              <p className="text-emerald-700 font-bold flex items-center gap-1">
+                                <Package className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                <span>Produto: {PRODUCTS.find(p => p.id === reward.productId)?.name || reward.productId}</span>
+                              </p>
+                            )}
+                            {reward.value && <p><strong>Benefício:</strong> R$ {reward.value.toFixed(2)}</p>}
+                            {reward.validityDays && <p><strong>Validade:</strong> {reward.validityDays} dias após resgate</p>}
+                            {reward.minOrderValue ? <p><strong>Uso Mínimo:</strong> R$ {reward.minOrderValue.toFixed(2)}</p> : <p><strong>Uso Mínimo:</strong> Sem valor mínimo</p>}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 pt-3 border-t border-slate-100">
+                          <button
+                            onClick={() => {
+                              onUpdateRewards(rewards.map(r => r.id === reward.id ? { ...r, isActive: !r.isActive } : r));
+                            }}
+                            className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-colors ${
+                              reward.isActive !== false ? 'bg-slate-100 text-slate-700 hover:bg-slate-200' : 'bg-emerald-500 text-white hover:bg-emerald-600'
+                            }`}
+                          >
+                            {reward.isActive !== false ? 'DESATIVAR' : 'ATIVAR'}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingRewardId(reward.id);
+                              setRewardForm({
+                                title: reward.title,
+                                description: reward.description,
+                                pointsCost: reward.pointsCost,
+                                type: (reward.type === 'free_product' ? 'free_item' : reward.type) || 'discount',
+                                productId: reward.productId || '',
+                                value: reward.value || 0,
+                                validityDays: reward.validityDays || 30,
+                                minOrderValue: reward.minOrderValue || 0,
+                                rulesText: (reward.rules || []).join('\n'),
+                                isActive: reward.isActive !== false
+                              });
+                              setIsRewardModalOpen(true);
+                            }}
+                            className="p-2.5 bg-slate-50 text-slate-700 hover:text-slate-900 border border-slate-200 rounded-xl"
+                            title="Editar Recompensa"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              if (confirm(`Deseja realmente excluir a recompensa "${reward.title}"?`)) {
+                                onUpdateRewards(rewards.filter(r => r.id !== reward.id));
+                              }
+                            }}
+                            className="p-2.5 bg-red-50 text-red-500 hover:bg-red-100 rounded-xl"
+                            title="Excluir Recompensa"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                      <button 
-                        onClick={() => {
-                          setEditingRewardId(null);
-                          setRewardForm({
-                            title: '',
-                            description: '',
-                            pointsCost: 200,
-                            type: 'discount',
-                            productId: '',
-                            value: 10,
-                            validityDays: 30,
-                            minOrderValue: 0,
-                            rulesText: 'Válido para 1 pedido\nNão cumulativo com outras promoções',
-                            isActive: true
-                          });
-                          setIsRewardModalOpen(true);
-                        }}
-                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 px-4 py-2.5 rounded-xl font-black text-xs flex items-center gap-2 shadow-md transition-all active:scale-95"
-                      >
-                        <Plus className="w-4 h-4 stroke-[3]" /> NOVA RECOMPENSA
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {rewards.map(reward => (
-                        <div key={reward.id} className="p-5 bg-slate-50 rounded-2xl border border-slate-100 flex flex-col justify-between relative overflow-hidden group hover:border-yellow-300 transition-all">
-                          <div className={`absolute top-0 right-0 w-2.5 h-full ${reward.isActive !== false ? 'bg-emerald-400' : 'bg-slate-300'}`}></div>
-                          <div>
-                            <div className="flex justify-between items-start mb-2 pr-3">
-                              <span className="bg-yellow-100 text-yellow-800 text-xs font-black px-2.5 py-1 rounded-full">
-                                {reward.pointsCost} PTS
-                              </span>
-                              <span className={`text-[10px] font-black px-2 py-0.5 rounded ${reward.isActive !== false ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}`}>
-                                {reward.isActive !== false ? 'ATIVO' : 'INATIVO'}
-                              </span>
-                            </div>
-                            <h4 className="font-black text-slate-900 text-base mb-1">{reward.title}</h4>
-                            <p className="text-xs text-slate-500 mb-3">{reward.description}</p>
-                            
-                            <div className="space-y-1 text-[11px] text-slate-600 font-medium bg-white p-3 rounded-xl border border-slate-100 mb-3">
-                              <p><strong>Tipo:</strong> {reward.type === 'discount' ? 'Desconto em R$' : (reward.type === 'free_item' || reward.type === 'free_product') ? 'Brinde / Produto Grátis' : 'Cashback'}</p>
-                              {reward.productId && (
-                                <p className="text-emerald-700 font-bold flex items-center gap-1">
-                                  <Package className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                  <span>Produto: {PRODUCTS.find(p => p.id === reward.productId)?.name || reward.productId}</span>
-                                </p>
-                              )}
-                              {reward.value && <p><strong>Benefício:</strong> R$ {reward.value.toFixed(2)}</p>}
-                              {reward.validityDays && <p><strong>Validade:</strong> {reward.validityDays} dias após resgate</p>}
-                              {reward.minOrderValue ? <p><strong>Uso Mínimo:</strong> R$ {reward.minOrderValue.toFixed(2)}</p> : <p><strong>Uso Mínimo:</strong> Sem valor mínimo</p>}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 pt-2 border-t border-slate-200/60">
-                            <button
-                              onClick={() => {
-                                onUpdateRewards(rewards.map(r => r.id === reward.id ? { ...r, isActive: !r.isActive } : r));
-                              }}
-                              className={`flex-1 py-2 rounded-xl text-xs font-black transition-colors ${
-                                reward.isActive !== false ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-emerald-500 text-white hover:bg-emerald-600'
-                              }`}
-                            >
-                              {reward.isActive !== false ? 'DESATIVAR' : 'ATIVAR'}
-                            </button>
-                            <button
-                              onClick={() => {
-                                setEditingRewardId(reward.id);
-                                setRewardForm({
-                                  title: reward.title,
-                                  description: reward.description,
-                                  pointsCost: reward.pointsCost,
-                                  type: (reward.type === 'free_product' ? 'free_item' : reward.type) || 'discount',
-                                  productId: reward.productId || '',
-                                  value: reward.value || 0,
-                                  validityDays: reward.validityDays || 30,
-                                  minOrderValue: reward.minOrderValue || 0,
-                                  rulesText: (reward.rules || []).join('\n'),
-                                  isActive: reward.isActive !== false
-                                });
-                                setIsRewardModalOpen(true);
-                              }}
-                              className="p-2 bg-white text-slate-700 hover:text-slate-900 border border-slate-200 rounded-xl"
-                              title="Editar Recompensa"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              onClick={() => {
-                                if (confirm(`Deseja realmente excluir a recompensa "${reward.title}"?`)) {
-                                  onUpdateRewards(rewards.filter(r => r.id !== reward.id));
-                                }
-                              }}
-                              className="p-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-xl"
-                              title="Excluir Recompensa"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                      {rewards.length === 0 && (
-                        <div className="col-span-full py-12 text-center">
-                          <Star className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-                          <p className="text-slate-400 font-bold">Nenhuma recompensa cadastrada no catálogo</p>
-                        </div>
-                      )}
-                    </div>
+                    ))}
+                    {rewards.length === 0 && (
+                      <div className="col-span-full py-16 text-center bg-white rounded-3xl border border-slate-100">
+                        <Star className="w-12 h-12 text-slate-200 mx-auto mb-3" />
+                        <p className="text-slate-400 font-bold">Nenhuma recompensa cadastrada no catálogo</p>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
-              {/* SUBTAB 3: CUPONS DE DESCONTO */}
+              {/* SUBTAB 3: CUPONS DE DESCONTO (CARDS DIRETOS E ALTOS) */}
               {benefitSubTab === 'coupons' && (
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="flex justify-between items-center mb-6">
-                    <div>
-                      <h3 className="font-black text-lg flex items-center gap-2">
-                        <Ticket className="text-yellow-500 w-5 h-5" /> Cupons Promocionais da Loja
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">Crie e gerencie cupons de desconto ativos para uso no checkout.</p>
-                    </div>
-                    <button 
-                      onClick={() => setIsAddingCoupon(true)}
-                      className="bg-yellow-400 hover:bg-yellow-500 p-2.5 rounded-xl text-slate-900 transition-colors flex items-center gap-1.5 font-black text-xs shadow-md"
-                    >
-                      <Plus className="w-4 h-4 stroke-[3]" /> NOVO CUPOM
-                    </button>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="space-y-4 w-full">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                     {coupons.map(coupon => (
-                      <div key={coupon.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 relative overflow-hidden flex flex-col justify-between">
-                        <div className={`absolute top-0 right-0 w-2 h-full ${coupon.isActive ? 'bg-green-400' : 'bg-slate-300'}`}></div>
+                      <div key={coupon.id} className="bg-white p-6 rounded-3xl border border-slate-100 relative overflow-hidden flex flex-col justify-between min-h-[280px] shadow-sm hover:border-yellow-400 transition-all">
+                        <div className={`absolute top-0 right-0 w-2.5 h-full ${coupon.isActive ? 'bg-emerald-400' : 'bg-slate-300'}`}></div>
                         <div>
-                          <div className="flex justify-between items-start mb-2">
+                          <div className="flex justify-between items-start mb-3">
                             <div className="flex items-center gap-2">
-                              <span className="font-black text-lg tracking-tighter text-slate-900">{coupon.code}</span>
+                              <span className="font-black text-xl tracking-wider text-slate-900 bg-yellow-400/20 px-3 py-1 rounded-xl">{coupon.code}</span>
                               {coupon.isOneTimePerUser && (
-                                <span className="bg-blue-100 text-blue-700 text-[8px] font-black px-1.5 py-0.5 rounded">ÚNICO</span>
+                                <span className="bg-blue-100 text-blue-700 text-[9px] font-black px-2 py-0.5 rounded-md">ÚNICO</span>
                               )}
                             </div>
                             <button 
                               onClick={() => onUpdateCoupons(coupons.filter(c => c.id !== coupon.id))}
-                              className="text-red-400 hover:text-red-600 p-1"
+                              className="text-slate-400 hover:text-red-600 p-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                              title="Excluir cupom"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
                           </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-bold text-slate-600">
-                              {coupon.type === 'fixed' ? `R$ ${coupon.value.toFixed(2)}` : `${coupon.value}%`} de desconto
+                          <div className="space-y-2 pt-2">
+                            <p className="text-2xl font-black text-emerald-600">
+                              {coupon.type === 'fixed' ? `R$ ${coupon.value.toFixed(2)} OFF` : `${coupon.value}% OFF`}
                             </p>
-                            <p className="text-[10px] text-slate-400">Validade: {new Date(coupon.validUntil).toLocaleDateString()}</p>
-                            <p className="text-[10px] text-slate-400">Uso: {coupon.usageCount} {coupon.usageLimit ? `/ ${coupon.usageLimit}` : ''}</p>
+                            <p className="text-xs text-slate-500 font-medium">Validade: {new Date(coupon.validUntil).toLocaleDateString()}</p>
+                            <p className="text-xs text-slate-400 font-bold">Usos: {coupon.usageCount} {coupon.usageLimit ? `/ ${coupon.usageLimit}` : 'ilimitado'}</p>
                           </div>
                         </div>
                         <button 
                           onClick={() => onUpdateCoupons(coupons.map(c => c.id === coupon.id ? { ...c, isActive: !c.isActive } : c))}
-                          className={`mt-3 w-full py-2 rounded-xl text-[10px] font-black transition-all ${coupon.isActive ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-500'}`}
+                          className={`mt-4 w-full py-3 rounded-xl text-xs font-black transition-all ${coupon.isActive ? 'bg-slate-900 text-white hover:bg-slate-800' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'}`}
                         >
-                          {coupon.isActive ? 'DESATIVAR' : 'ATIVAR'}
+                          {coupon.isActive ? 'DESATIVAR CUPOM' : 'ATIVAR CUPOM'}
                         </button>
                       </div>
                     ))}
                     {coupons.length === 0 && (
-                      <div className="col-span-full py-12 text-center">
+                      <div className="col-span-full py-16 text-center bg-white rounded-3xl border border-slate-100">
                         <Ticket className="w-12 h-12 text-slate-200 mx-auto mb-3" />
                         <p className="text-slate-400 font-bold">Nenhum cupom cadastrado</p>
                       </div>
@@ -2020,22 +2282,13 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 </div>
               )}
 
-              {/* SUBTAB 4: GESTÃO DE INDICAÇÕES */}
+              {/* SUBTAB 4: GESTÃO DE INDICAÇÕES (TABELA DIRETA E AMPLA) */}
               {benefitSubTab === 'referrals' && (
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                  <div className="flex justify-between items-center mb-6">
-                    <div>
-                      <h3 className="font-black text-lg flex items-center gap-2">
-                        <Users className="text-yellow-500 w-5 h-5" /> Gestão de Indicações
-                      </h3>
-                      <p className="text-xs text-slate-500 mt-0.5">Histórico completo de convites enviados e convertidos em compras.</p>
-                    </div>
-                  </div>
-
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 w-full overflow-hidden">
                   <div className="overflow-x-auto">
                     <table className="w-full text-left">
                       <thead>
-                        <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
+                        <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">
                           <th className="pb-4 px-4">Quem Indicou</th>
                           <th className="pb-4 px-4">Indicado</th>
                           <th className="pb-4 px-4">Data</th>
@@ -2119,94 +2372,16 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
 
           {activeTab === 'predictions' && (
-            <motion.div key="predictions" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
-              <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-                <div className="flex justify-between items-center mb-6">
-                  <h3 className="font-black text-lg flex items-center gap-2">
-                    <Calendar className="text-yellow-500 w-5 h-5" /> Previsão de Recompra
-                  </h3>
-                  <p className="text-xs text-slate-400 font-bold">Baseado na média de intervalo entre pedidos concluídos</p>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">
-                        <th className="pb-4 px-4">Cliente</th>
-                        <th className="pb-4 px-4">Endereço</th>
-                        <th className="pb-4 px-4 text-center">Pedidos</th>
-                        <th className="pb-4 px-4 text-center">Total Qtd</th>
-                        <th className="pb-4 px-4">Próxima Compra (Prev.)</th>
-                        <th className="pb-4 px-4 text-right">Ações</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-50">
-                      {customerPredictions.map(pred => (
-                        <tr key={pred.customer.id} className="group hover:bg-slate-50 transition-colors">
-                          <td className="py-4 px-4 cursor-pointer" onClick={() => setViewingCustomerHistory(pred)}>
-                            <p className="font-bold text-slate-900 group-hover:text-yellow-600 transition-colors">{pred.customer.name}</p>
-                            <p className="text-[10px] text-slate-400">{pred.customer.phone}</p>
-                          </td>
-                          <td className="py-4 px-4">
-                            <p className="text-xs text-slate-600 truncate max-w-[200px]">
-                              {pred.customer.addresses?.[0]?.street}, {pred.customer.addresses?.[0]?.number}
-                            </p>
-                            <p className="text-[10px] text-slate-400">{pred.customer.addresses?.[0]?.neighborhood}</p>
-                          </td>
-                          <td className="py-4 px-4 text-center">
-                            <span className="font-bold text-slate-900">{pred.totalOrders}</span>
-                          </td>
-                          <td className="py-4 px-4 text-center">
-                            <span className="font-bold text-slate-900">{pred.totalQuantity}</span>
-                          </td>
-                          <td className="py-4 px-4">
-                            {pred.nextPrediction ? (
-                              <div>
-                                <p className={`font-black text-xs ${new Date(pred.nextPrediction) < new Date() ? 'text-red-500' : 'text-slate-900'}`}>
-                                  {new Date(pred.nextPrediction).toLocaleDateString()}
-                                </p>
-                                <p className="text-[9px] text-slate-400 uppercase font-bold">Média: {Math.round(pred.avgInterval)} dias</p>
-                              </div>
-                            ) : (
-                              <span className="text-[10px] text-slate-300 font-bold italic">Histórico insuficiente</span>
-                            )}
-                          </td>
-                          <td className="py-4 px-4 text-right">
-                            <div className="flex justify-end gap-2">
-                              <button 
-                                onClick={() => handleSendMessage(pred, 'reminder')}
-                                className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100 transition-colors"
-                                title="Enviar WhatsApp"
-                              >
-                                <MessageSquare className="w-4 h-4" />
-                              </button>
-                              <button 
-                                onClick={() => {
-                                  setSelectedPrediction(pred);
-                                  setIsCouponModalOpen(true);
-                                }}
-                                className="p-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition-colors"
-                                title="Enviar Cupom"
-                              >
-                                <Ticket className="w-4 h-4" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                      {customerPredictions.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-12 text-center">
-                            <Calendar className="w-12 h-12 text-slate-200 mx-auto mb-3" />
-                            <p className="text-slate-400 font-bold">Nenhum dado de previsão disponível ainda.</p>
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </motion.div>
+            <PredictionsCRMTab
+              allCustomers={allCustomers}
+              orders={orders}
+              coupons={coupons}
+              rewards={rewards}
+              onOpenCouponModal={(pred) => {
+                setSelectedPrediction(pred);
+                setIsCouponModalOpen(true);
+              }}
+            />
           )}
 
           {activeTab === 'collaborators' && (
@@ -2736,12 +2911,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       <AnimatePresence>
         {selectedOrderDetails && (() => {
           const o = selectedOrderDetails;
-          const elapsed = getElapsedMinutes(o.createdAt);
-          const customerOtherOrders = orders.filter(ord => 
-            (ord.customerId === o.customerId || (o.phone && ord.phone === o.phone)) && 
-            ord.id !== o.id
-          ).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          const totalOrdersCount = customerOtherOrders.length + 1;
+          const elapsed = getOrderElapsedMinutes(o);
+          const cleanCustPhone = (o.phone || '').replace(/\D/g, '');
+          const customerAllOrders = orders.filter(ord => {
+            const cleanOrdPhone = (ord.phone || '').replace(/\D/g, '');
+            const matchId = !!(ord.customerId && o.customerId && ord.customerId === o.customerId);
+            const matchPhone = !!(cleanCustPhone.length >= 8 && cleanOrdPhone.length >= 8 && cleanOrdPhone === cleanCustPhone);
+            return matchId || matchPhone;
+          }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+          const totalOrdersCount = customerAllOrders.length;
           const assignedDriver = deliveryPersons.find(dp => dp.id === o.deliveryPersonId);
 
           return (
@@ -2785,9 +2963,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
                     {/* Relógio em Destaque */}
                     <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-2.5 sm:p-3 text-right shrink-0">
-                      <span className="text-[10px] uppercase font-bold text-slate-400 block">Tempo Decorrido</span>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                        {o.status === 'Concluído' ? 'Tempo de Entrega' : o.status === 'Cancelado' ? 'Tempo até Cancelar' : 'Tempo Decorrido'}
+                      </span>
                       <div className="flex items-center gap-1.5 text-yellow-400 font-black text-base sm:text-lg mt-0.5">
-                        <Clock className="w-4 h-4 sm:w-5 sm:h-5 animate-pulse" />
+                        <Clock className={`w-4 h-4 sm:w-5 sm:h-5 ${o.status !== 'Concluído' && o.status !== 'Cancelado' ? 'animate-pulse' : ''}`} />
                         <span>{elapsed} min</span>
                       </div>
                     </div>
@@ -3199,19 +3379,24 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider flex items-center gap-1.5">
                         <History className="w-3.5 h-3.5 text-slate-500" />
-                        Histórico de Pedidos Anteriores ({customerOtherOrders.length})
+                        Histórico de Pedidos ({customerAllOrders.length})
                       </span>
+                      {customerAllOrders.length > 1 && (
+                        <span className="text-[10px] text-slate-400 font-bold hidden sm:inline">
+                          Clique em outro pedido para alternar
+                        </span>
+                      )}
                     </div>
 
-                    {customerOtherOrders.length === 0 ? (
+                    {customerAllOrders.length === 0 ? (
                       <div className="text-center py-4 bg-white rounded-xl border border-slate-100 text-xs text-slate-400 font-bold">
                         Este é o primeiro pedido deste cliente na plataforma.
                       </div>
                     ) : (
-                      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white custom-scrollbar">
+                      <div className="overflow-x-auto max-h-72 overflow-y-auto rounded-xl border border-slate-200 bg-white custom-scrollbar">
                         <table className="w-full text-left text-xs border-collapse">
-                          <thead>
-                            <tr className="bg-slate-100/70 border-b border-slate-200 text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                          <thead className="sticky top-0 z-10 bg-slate-100 border-b border-slate-200">
+                            <tr className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
                               <th className="py-2.5 px-3">Data</th>
                               <th className="py-2.5 px-3">Produto Adquirido</th>
                               <th className="py-2.5 px-3 text-center">Qtd</th>
@@ -3222,7 +3407,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100">
-                            {customerOtherOrders.slice(0, 8).map(histOrder => {
+                            {customerAllOrders.map(histOrder => {
+                              const isCurrentOrder = histOrder.id === o.id;
                               const dateFormatted = new Date(histOrder.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
                               const totalItemsQty = histOrder.items.reduce((acc, it) => acc + it.quantity, 0);
                               const itemsDesc = histOrder.items.map(it => {
@@ -3231,9 +3417,25 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               }).join(', ');
 
                               return (
-                                <tr key={histOrder.id} className="hover:bg-slate-50/80">
+                                <tr 
+                                  key={histOrder.id} 
+                                  onClick={() => !isCurrentOrder && setSelectedOrderDetails(histOrder)}
+                                  className={`transition-colors ${
+                                    isCurrentOrder 
+                                      ? 'bg-amber-50/90 font-bold border-l-4 border-amber-400' 
+                                      : 'hover:bg-slate-50/80 cursor-pointer'
+                                  }`}
+                                  title={isCurrentOrder ? 'Pedido atualmente em exibição' : `Clique para ver o pedido #${histOrder.id}`}
+                                >
                                   <td className="py-2.5 px-3 font-semibold text-slate-600 whitespace-nowrap">
-                                    {dateFormatted}
+                                    <div className="flex items-center gap-1.5">
+                                      <span>{dateFormatted}</span>
+                                      {isCurrentOrder && (
+                                        <span className="text-[9px] font-black bg-amber-200 text-amber-950 px-1.5 py-0.5 rounded border border-amber-300 uppercase tracking-tight">
+                                          Atual
+                                        </span>
+                                      )}
+                                    </div>
                                   </td>
                                   <td className="py-2.5 px-3 font-bold text-slate-800">
                                     <div className="max-w-[180px] truncate" title={itemsDesc}>

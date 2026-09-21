@@ -34,8 +34,9 @@ import {
   ShoppingCart
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MapContainer, TileLayer, GeoJSON, Marker, Popup } from 'react-leaflet';
+import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import { createCirclePolygon } from '../utils/geoUtils';
 import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod } from '../types';
 import { PRODUCTS } from '../constants';
 import { businessService, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
@@ -333,6 +334,28 @@ const HistoryCard: React.FC<{
       )}
     </div>
   );
+};
+
+const CustomerCoverageFit: React.FC<{ coverageAreas: CoverageArea[] }> = ({ coverageAreas }) => {
+  const map = useMap();
+  useEffect(() => {
+    const valid = coverageAreas
+      .map(a => a.boundary || (a.center ? createCirclePolygon(a.center.lat, a.center.lng, 1.2) : null))
+      .filter(Boolean);
+
+    if (valid.length > 0) {
+      try {
+        const group = L.featureGroup(valid.map(b => L.geoJSON(b)));
+        const bounds = group.getBounds();
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [35, 35], animate: true });
+        }
+      } catch (e) {
+        console.error("Erro ao enquadrar mapa de cobertura do cliente:", e);
+      }
+    }
+  }, [coverageAreas, map]);
+  return null;
 };
 
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ 
@@ -2741,40 +2764,40 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 <button onClick={() => setShowCoverageMap(false)} className="p-2 hover:bg-slate-100 rounded-full"><X className="w-6 h-6 text-slate-400" /></button>
               </div>
               <div className="flex-1 relative bg-slate-100 z-0 isolate overflow-hidden">
-                <MapContainer center={[-22.825, -43.055]} zoom={14} style={{ height: '100%', width: '100%' }}>
+                <MapContainer center={[-22.905, -43.11]} zoom={13} style={{ height: '100%', width: '100%' }}>
                   <TileLayer
                     url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
                   />
-                  {coverageAreas.map(area => (
-                    <React.Fragment key={area.id}>
-                      {area.boundary ? (
-                        <GeoJSON 
-                          key={`boundary-${area.id}-${area.neighborhood}`}
-                          data={area.boundary}
-                          style={{
-                            fillColor: '#facc15',
-                            weight: 2,
-                            opacity: 1,
-                            color: '#eab308',
-                            fillOpacity: 0.3
-                          }}
-                        >
-                          <Popup>
-                            <div className="font-bold">{area.neighborhood}</div>
-                            <div className="text-xs">{area.city}</div>
-                          </Popup>
-                        </GeoJSON>
-                      ) : area.center && (
-                        <Marker position={[area.center.lat, area.center.lng]}>
-                          <Popup>
-                            <div className="font-bold">{area.neighborhood}</div>
-                            <div className="text-xs">{area.city}</div>
-                          </Popup>
-                        </Marker>
-                      )}
-                    </React.Fragment>
-                  ))}
+                  <CustomerCoverageFit coverageAreas={coverageAreas} />
+                  {coverageAreas.map(area => {
+                    const boundaryData = area.boundary || (area.center ? createCirclePolygon(area.center.lat, area.center.lng, 1.2) : null);
+                    if (!boundaryData) return null;
+
+                    return (
+                      <GeoJSON 
+                        key={`customer-boundary-${area.id}`}
+                        data={boundaryData}
+                        style={{
+                          fillColor: '#facc15',
+                          weight: 2,
+                          opacity: 1,
+                          color: '#ca8a04',
+                          fillOpacity: 0.35
+                        }}
+                      >
+                        <Popup>
+                          <div className="p-1">
+                            <div className="font-black text-sm text-slate-900">{area.neighborhood}</div>
+                            <div className="text-xs text-slate-500 font-semibold">{area.city}</div>
+                            <div className="mt-1 text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200 inline-block">
+                              ✓ Área Atendida
+                            </div>
+                          </div>
+                        </Popup>
+                      </GeoJSON>
+                    );
+                  })}
                 </MapContainer>
               </div>
               <div className="p-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between text-sm">
