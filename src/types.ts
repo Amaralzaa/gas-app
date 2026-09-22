@@ -54,9 +54,11 @@ export interface Order {
   completedAt?: string;
   isScheduled?: boolean;
   scheduledDate?: string;
+  scheduledDateISO?: string; // Formato YYYY-MM-DD
   scheduledPeriod?: string;
   scheduledPeriodName?: string;
   scheduledTimeRange?: string;
+  isForceActivated?: boolean; // Forçado para fila de pendentes pelo gestor
 }
 
 export interface Freebie {
@@ -135,6 +137,26 @@ export interface PointHistoryItem {
   createdAt: string;
 }
 
+export interface RedeemedReward {
+  id: string;
+  code: string; // Ex: 'RESG-9F2B8D'
+  rewardId: string;
+  rewardTitle: string;
+  rewardType: 'discount' | 'free_item' | 'free_product' | 'cashback' | 'voucher';
+  productId?: string;
+  discountValue?: number;
+  pointsCost: number;
+  minOrderValue?: number;
+  validUntil?: string;
+  userId: string;
+  userName?: string;
+  userPhone?: string;
+  status: 'active' | 'used';
+  redeemedAt: string;
+  usedAt?: string;
+  orderId?: string;
+}
+
 export interface AppUser {
   id: string;
   email?: string;
@@ -149,6 +171,7 @@ export interface AppUser {
   lastMessageSentAt?: string; // ISO string
   allowedTabs?: string[]; // For granular access control (e.g. ['orders', 'map'])
   pointHistory?: PointHistoryItem[];
+  redeemedRewards?: RedeemedReward[];
 }
 
 export type ReferralStatus = 'Pendente' | 'Validado' | 'Confirmado' | 'Rejeitado';

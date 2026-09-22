@@ -27,7 +27,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AppView, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo } from './types';
+import { AppView, Address, Order, OrderStatus, Product, OrderItem, AppUser, UserRole, Expense, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo } from './types';
 import { PRODUCTS } from './constants';
 import { CustomerDashboard } from './components/CustomerDashboard';
 import { ManagerDashboard } from './components/ManagerDashboard';
@@ -41,6 +41,7 @@ import { expenseService } from './services/expenseService';
 import { coverageService } from './services/coverageService';
 import { referralService } from './services/referralService';
 import { businessService, DEFAULT_BUSINESS_INFO } from './services/businessService';
+import { codeService } from './services/codeService';
 import { supabase } from './lib/supabase';
 import { 
   MOCK_USERS, 
@@ -109,6 +110,7 @@ const LoginView = ({
         let localName = '';
         try { localName = localStorage.getItem('gas_app_customer_name') || ''; } catch {}
         const cleanPhone = phone.replace(/\D/g, '');
+        const cachedAddresses = userService.getAddressCache(authUser.id);
 
         const immediateUser: AppUser = {
           id: authUser.id,
@@ -117,7 +119,7 @@ const LoginView = ({
           name: (localName && localName.trim()) || authUser.user_metadata?.name || (loginMethod === 'phone' ? 'Cliente' : 'Usuário'),
           phone: cleanPhone || authUser.user_metadata?.phone,
           points: 0,
-          addresses: [],
+          addresses: cachedAddresses,
           allowedTabs: []
         };
 
@@ -456,18 +458,30 @@ export default function App() {
                 session.user.email,
                 session.user.user_metadata
               );
-              if (!cancelled) setCurrentUser(appUser);
+              if (!cancelled) {
+                const userWithCode = {
+                  ...appUser,
+                  referralCode: appUser.referralCode || codeService.getUserReferralCode(appUser)
+                };
+                setCurrentUser(userWithCode);
+              }
             } else {
               const appUser = await authService.getProfileForUser(
                 session.user.id, session.user.email, session.user.user_metadata
               );
-              if (!cancelled) setCurrentUser(appUser);
+              if (!cancelled) {
+                const userWithCode = {
+                  ...appUser,
+                  referralCode: appUser.referralCode || codeService.getUserReferralCode(appUser)
+                };
+                setCurrentUser(userWithCode);
+              }
             }
           } catch (profileErr) {
             console.warn('Profile fetch fallback:', profileErr);
             // Cria objeto mínimo para não bloquear acesso
             if (!cancelled) {
-              setCurrentUser({
+              const minimalUser: AppUser = {
                 id: session.user.id,
                 email: session.user.email,
                 role: (session.user.user_metadata?.role as any) || 'cliente',
@@ -476,7 +490,9 @@ export default function App() {
                 points: 0,
                 addresses: [],
                 allowedTabs: []
-              });
+              };
+              minimalUser.referralCode = codeService.getUserReferralCode(minimalUser);
+              setCurrentUser(minimalUser);
             }
           } finally {
             clearTimeout(safetyTimeout);
@@ -547,7 +563,12 @@ export default function App() {
       setExpenses(fetchedExpenses || []);
       localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses || []));
 
-      setAllUsers(fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS);
+      const rawUsers = fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS;
+      const usersWithReferral = rawUsers.map(u => ({
+        ...u,
+        referralCode: u.referralCode || codeService.getUserReferralCode(u)
+      }));
+      setAllUsers(usersWithReferral);
       setReferrals(fetchedReferrals || []);
       if (fetchedCoverage && fetchedCoverage.length > 0) {
         setCoverageAreas(fetchedCoverage);
@@ -560,6 +581,50 @@ export default function App() {
     }
   };
 
+  // Sincronização retroativa de endereços: se cliente logado não tem endereços salvos mas tem histórico de pedidos
+  const hasAttemptedAddressSync = React.useRef(false);
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'cliente') return;
+    if (hasAttemptedAddressSync.current) return;
+    if (!orders || orders.length === 0) return;
+
+    // Se o usuário já tem endereços salvos, marca como verificado e não altera
+    if (currentUser.addresses && currentUser.addresses.length > 0) {
+      hasAttemptedAddressSync.current = true;
+      return;
+    }
+
+    const cleanPhone = (currentUser.phone || '').replace(/\D/g, '');
+    const userOrders = orders.filter(o => 
+      o.status !== 'Cancelado' &&
+      (o.customerId === currentUser.id || (cleanPhone.length >= 8 && !!o.phone && o.phone.replace(/\D/g, '') === cleanPhone))
+    );
+
+    if (userOrders.length === 0) return;
+
+    const recoveredAddresses: Address[] = [];
+    for (const ord of userOrders) {
+      if (ord.address && ord.address.street && ord.address.number) {
+        const isDuplicated = recoveredAddresses.some(a => 
+          (a.cep && ord.address.cep && a.cep.replace(/\D/g, '') === ord.address.cep.replace(/\D/g, '') && a.number.trim().toLowerCase() === ord.address.number.trim().toLowerCase()) ||
+          (a.street.trim().toLowerCase() === ord.address.street.trim().toLowerCase() && a.number.trim().toLowerCase() === ord.address.number.trim().toLowerCase())
+        );
+        if (!isDuplicated) {
+          recoveredAddresses.push(ord.address);
+        }
+      }
+    }
+
+    if (recoveredAddresses.length > 0) {
+      hasAttemptedAddressSync.current = true;
+      console.log(`[Auto-Sync] Recuperados ${recoveredAddresses.length} endereço(s) anteriores do histórico de pedidos para o cliente.`);
+      handleUpdateUser({
+        ...currentUser,
+        addresses: recoveredAddresses
+      });
+    }
+  }, [currentUser?.id, currentUser?.addresses?.length, orders]);
+
   const handleUpdateBusinessInfo = async (newInfo: BusinessInfo) => {
     setBusinessInfo(newInfo);
     try {
@@ -570,6 +635,7 @@ export default function App() {
   };
 
   const handleLogout = async () => {
+    hasAttemptedAddressSync.current = false;
     // 1. Desconecta o estado React imediatamente para voltar à tela de login sem travar
     setCurrentUser(null);
 
@@ -752,10 +818,14 @@ export default function App() {
 
   const handleUpdateUser = async (updatedUser: AppUser) => {
     try {
-      await userService.updateProfile(updatedUser.id, updatedUser);
-      setAllUsers(prev => prev.map(u => u.id === updatedUser.id ? updatedUser : u));
-      if (currentUser?.id === updatedUser.id) {
-        setCurrentUser(updatedUser);
+      const userWithCode = {
+        ...updatedUser,
+        referralCode: updatedUser.referralCode || codeService.getUserReferralCode(updatedUser)
+      };
+      await userService.updateProfile(userWithCode.id, userWithCode);
+      setAllUsers(prev => prev.map(u => u.id === userWithCode.id ? userWithCode : u));
+      if (currentUser?.id === userWithCode.id) {
+        setCurrentUser(userWithCode);
       }
     } catch (err) {
       console.error('Error updating user profile:', err);

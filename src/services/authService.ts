@@ -20,6 +20,8 @@ export const authService = {
         localName = localStorage.getItem('gas_app_customer_name') || '';
       } catch {}
 
+      const cachedAddresses = userService.getAddressCache(user.id);
+
       // Self-healing: If profile is missing but user is authenticated
       if (!profile || error) {
         console.log('Profile missing or error, attempting self-healing creation...');
@@ -34,7 +36,7 @@ export const authService = {
           role: (user.user_metadata?.role as UserRole) || 'cliente',
           phone: user.user_metadata?.phone || '',
           points: 0,
-          addresses: [],
+          addresses: cachedAddresses,
           allowedTabs: []
         };
 
@@ -52,7 +54,7 @@ export const authService = {
             name: resolvedName,
             phone: user.user_metadata?.phone,
             points: 0,
-            addresses: [],
+            addresses: cachedAddresses,
             allowedTabs: []
           };
         }
@@ -63,6 +65,14 @@ export const authService = {
         ? profile.name
         : (localName || profile.name || user.user_metadata?.name || 'Cliente');
 
+      const resolvedAddresses = (profile.addresses && profile.addresses.length > 0)
+        ? profile.addresses
+        : cachedAddresses;
+
+      if (profile.addresses && profile.addresses.length > 0) {
+        userService.saveAddressCache(profile.id, profile.addresses);
+      }
+
       return {
         id: profile.id,
         email: profile.email,
@@ -70,7 +80,7 @@ export const authService = {
         name: finalName,
         phone: profile.phone,
         points: profile.points,
-        addresses: profile.addresses || [],
+        addresses: resolvedAddresses,
         location: profile.location,
         allowedTabs: profile.allowedTabs || [],
       };
@@ -199,6 +209,8 @@ export const authService = {
       localName = localStorage.getItem('gas_app_customer_name') || '';
     } catch {}
 
+    const cachedAddresses = userService.getAddressCache(userId);
+
     const fallbackUser: AppUser = {
       id: userId,
       email: userEmail || '',
@@ -206,7 +218,7 @@ export const authService = {
       name: (localName && localName.trim()) || userMeta?.name || 'Cliente',
       phone: userMeta?.phone || '',
       points: 0,
-      addresses: [],
+      addresses: cachedAddresses,
       allowedTabs: [],
       pointHistory: userService.getPointHistory(userId)
     };
@@ -235,6 +247,17 @@ export const authService = {
           Promise.resolve(supabase.from('profiles').update({ name: localName }).eq('id', userId)).catch(() => {});
         }
 
+        const resolvedAddresses = (profile.addresses && profile.addresses.length > 0)
+          ? profile.addresses
+          : cachedAddresses;
+
+        if (profile.addresses && profile.addresses.length > 0) {
+          userService.saveAddressCache(profile.id, profile.addresses);
+        } else if (cachedAddresses.length > 0) {
+          // Se o perfil remoto está sem endereços mas temos no cache local, sincroniza em background
+          Promise.resolve(supabase.from('profiles').update({ addresses: cachedAddresses }).eq('id', userId)).catch(() => {});
+        }
+
         return {
           id: profile.id,
           email: profile.email,
@@ -242,7 +265,7 @@ export const authService = {
           name: finalName,
           phone: profile.phone,
           points: profile.points || 0,
-          addresses: profile.addresses || [],
+          addresses: resolvedAddresses,
           location: profile.location,
           allowedTabs: (profile as any).allowed_tabs || profile.allowedTabs || [],
           pointHistory: userService.getPointHistory(profile.id)
@@ -259,7 +282,7 @@ export const authService = {
         role: (userMeta?.role as UserRole) || 'cliente',
         phone: userMeta?.phone || '',
         points: 0,
-        addresses: [],
+        addresses: cachedAddresses,
         allowed_tabs: []
       };
       Promise.resolve(supabase.from('profiles').upsert(newProfile)).catch(() => {});

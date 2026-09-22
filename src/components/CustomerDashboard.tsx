@@ -37,10 +37,12 @@ import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import { createCirclePolygon } from '../utils/geoUtils';
-import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod } from '../types';
+import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod, RedeemedReward } from '../types';
 import { PRODUCTS } from '../constants';
 import { businessService, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
 import { userService } from '../services/userService';
+import { codeService } from '../services/codeService';
+import { rewardService } from '../services/rewardService';
 
 const houseIcon = L.divIcon({ html: '<div style="font-size:28px">🏠</div>', className: '', iconAnchor: [14,28] });
 const motoIcon  = L.divIcon({ html: '<div style="font-size:28px">🛵</div>', className: '', iconAnchor: [14,28] });
@@ -66,21 +68,69 @@ interface CustomerDashboardProps {
   businessInfo?: BusinessInfo;
 }
 
-// ScheduledPeriodSelector — Seletor dinâmico de turnos de agendamento com mensagem contextual
+export interface ScheduledDateOption {
+  isoDate: string;
+  dayLabel: string;
+  shortDate: string;
+  fullDisplay: string;
+}
+
+// ScheduledPeriodSelector — Seletor dinâmico de turnos e dias de agendamento
 const ScheduledPeriodSelector: React.FC<{
   periods: DeliveryPeriod[];
   selectedId: string;
   onSelect: (id: string) => void;
+  availableDates?: ScheduledDateOption[];
+  selectedDateISO?: string;
+  onSelectDate?: (isoDate: string) => void;
   dateInfo: { display: string };
-}> = ({ periods, selectedId, onSelect, dateInfo }) => {
+}> = ({ periods, selectedId, onSelect, availableDates = [], selectedDateISO, onSelectDate, dateInfo }) => {
   const selected = periods.find(p => p.id === selectedId) || periods[0];
 
   return (
     <div className="bg-purple-50/70 border border-purple-200 p-3.5 rounded-2xl space-y-3 shadow-xs">
+      {/* Seletor de Datas da Semana (Carrossel Horizontal) */}
+      {availableDates.length > 0 && onSelectDate && (
+        <div className="space-y-2 pb-1 border-b border-purple-200/60">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-black text-purple-950 flex items-center gap-1.5">
+              <Calendar className="w-3.5 h-3.5 text-purple-600" />
+              Selecione o Dia da Entrega:
+            </span>
+            <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
+              Próximos 7 dias
+            </span>
+          </div>
+
+          <div className="flex gap-2 overflow-x-auto pb-1.5 pt-0.5 custom-scrollbar">
+            {availableDates.map(d => {
+              const isSelectedDate = d.isoDate === selectedDateISO;
+              return (
+                <button
+                  key={d.isoDate}
+                  type="button"
+                  onClick={() => onSelectDate(d.isoDate)}
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl border text-center transition-all cursor-pointer ${
+                    isSelectedDate
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-md font-black scale-105'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-purple-100/70 hover:border-purple-300'
+                  }`}
+                >
+                  <span className={`block text-[10px] uppercase font-bold ${isSelectedDate ? 'text-purple-100' : 'text-slate-400'}`}>
+                    {d.dayLabel}
+                  </span>
+                  <span className="block text-xs font-black">{d.shortDate}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between">
         <span className="text-xs font-black text-purple-950 flex items-center gap-1.5">
-          <Calendar className="w-3.5 h-3.5 text-purple-600" />
-          Agendamento para {dateInfo.display}
+          <Clock className="w-3.5 h-3.5 text-purple-600" />
+          Turnos para {dateInfo.display}:
         </span>
         <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full border border-purple-200">
           {periods.length} {periods.length === 1 ? 'turno disponível' : 'turnos disponíveis'}
@@ -141,11 +191,11 @@ const ScheduledPeriodSelector: React.FC<{
         <div className="bg-white/90 border border-purple-200 p-3 rounded-xl flex items-start gap-2.5 text-purple-950 shadow-xs">
           <Truck className="w-4 h-4 text-purple-700 mt-0.5 flex-shrink-0" />
           <p className="text-xs font-bold leading-relaxed">
-            Seu gás será entregue no período de{' '}
+            Seu gás será entregue em{' '}
+            <span className="font-black text-purple-900">{dateInfo.display}</span> no período de{' '}
             <span className="font-black text-purple-800 underline decoration-purple-400 decoration-2">
               {selected.startTime} às {selected.endTime}
-            </span>{' '}
-            de {dateInfo.display}.
+            </span>.
           </p>
         </div>
       )}
@@ -410,9 +460,45 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     return businessService.isStoreCurrentlyOpen(businessInfo);
   }, [businessInfo]);
 
-  const scheduledDateInfo = useMemo(() => {
-    return businessService.getNextDayFormatted();
+  // Datas disponíveis para agendamento (próximos 7 dias)
+  const availableScheduledDates = useMemo<ScheduledDateOption[]>(() => {
+    const dates: ScheduledDateOption[] = [];
+    const now = new Date();
+    for (let i = 1; i <= 7; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const isoDate = `${year}-${month}-${day}`;
+
+      const rawWeekday = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
+      const dayLabel = i === 1 ? 'Amanhã' : rawWeekday.charAt(0).toUpperCase() + rawWeekday.slice(1);
+      const shortDate = d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+      const fullWeekday = d.toLocaleDateString('pt-BR', { weekday: 'long' });
+      const capitalizedFullWeekday = fullWeekday.charAt(0).toUpperCase() + fullWeekday.slice(1);
+      const fullDisplay = `${shortDate}/${year} (${capitalizedFullWeekday})`;
+
+      dates.push({ isoDate, dayLabel, shortDate, fullDisplay });
+    }
+    return dates;
   }, []);
+
+  const [selectedScheduledDateISO, setSelectedScheduledDateISO] = useState<string>(() => {
+    const tomorrow = new Date(Date.now() + 86400000);
+    const y = tomorrow.getFullYear();
+    const m = String(tomorrow.getMonth() + 1).padStart(2, '0');
+    const d = String(tomorrow.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  });
+
+  const scheduledDateInfo = useMemo(() => {
+    const found = availableScheduledDates.find(d => d.isoDate === selectedScheduledDateISO);
+    if (found) return { display: found.fullDisplay, fullDisplay: found.fullDisplay, dayLabel: found.dayLabel };
+    const first = availableScheduledDates[0];
+    return first 
+      ? { display: first.fullDisplay, fullDisplay: first.fullDisplay, dayLabel: first.dayLabel }
+      : { display: 'Amanhã', fullDisplay: 'Amanhã', dayLabel: 'Amanhã' };
+  }, [availableScheduledDates, selectedScheduledDateISO]);
 
   // Se a loja estiver fechada para pedidos imediatos, seleciona agendamento por padrão
   useEffect(() => {
@@ -437,7 +523,44 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
   // Novos estados para detalhes de item e confirmação de resgate
   const [selectedRewardDetails, setSelectedRewardDetails] = useState<Reward | null>(null);
-  const [rewardConfirmation, setRewardConfirmation] = useState<{ reward: Reward; stage: 'confirm' | 'success' } | null>(null);
+  const [rewardConfirmation, setRewardConfirmation] = useState<{ reward: Reward; stage: 'confirm' | 'success'; code?: string } | null>(null);
+
+  // Estados para resgates de recompensas com código único
+  const [redeemedRewards, setRedeemedRewards] = useState<RedeemedReward[]>(() => {
+    return rewardService.getRedeemedRewards(user.id);
+  });
+  const [selectedViewRedemption, setSelectedViewRedemption] = useState<RedeemedReward | null>(null);
+  const [copiedRedemptionCode, setCopiedRedemptionCode] = useState(false);
+
+  // Sincronização em tempo real de resgates (storage e broadcast)
+  useEffect(() => {
+    const syncRedeemed = () => {
+      setRedeemedRewards(rewardService.getRedeemedRewards(user.id));
+    };
+    syncRedeemed();
+
+    let channel: BroadcastChannel | null = null;
+    try {
+      channel = new BroadcastChannel('gas_app_sync_channel');
+      channel.onmessage = (e) => {
+        if (e.data?.type === 'SYNC_REDEEMED_REWARDS') {
+          syncRedeemed();
+        }
+      };
+    } catch {}
+
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'gas_app_redeemed_rewards') {
+        syncRedeemed();
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      if (channel) channel.close();
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [user.id]);
 
   // Novo estado para modal próprio de exclusão de indicação com confirmação e check
   const [deleteConfirmReferral, setDeleteConfirmReferral] = useState<{ referral: Referral; stage: 'confirm' | 'success' } | null>(null);
@@ -475,16 +598,13 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const [showCoverageMap, setShowCoverageMap] = useState(false);
   const [saveAddress, setSaveAddress] = useState(true);
 
-  // Código de indicação único e consistente por usuário
+  // Código de indicação único e consistente por usuário (usando codeService)
   const userReferralCode = useMemo(() => {
-    if (user.referralCode && user.referralCode.trim()) return user.referralCode.toUpperCase();
-    const cleanName = (user.name || 'CLIENTE').split(' ')[0].replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 6);
-    const cleanId = (user.id || '1001').replace(/[^a-zA-Z0-9]/g, '').slice(-4).toUpperCase();
-    return `${cleanName}${cleanId}`;
+    return codeService.getUserReferralCode(user);
   }, [user.referralCode, user.name, user.id]);
 
   useEffect(() => {
-    if (!user.referralCode && userReferralCode) {
+    if ((!user.referralCode || user.referralCode !== userReferralCode) && userReferralCode) {
       onUpdateUser({ ...user, referralCode: userReferralCode });
     }
   }, [user.referralCode, userReferralCode]);
@@ -575,14 +695,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
 
     // 2. Não permitir aplicar código próprio
-    if (user.referralCode && user.referralCode.toUpperCase() === pendingCode.toUpperCase()) {
+    if (codeService.matchesReferralCode(user, pendingCode)) {
       localStorage.removeItem('gas_app_pending_ref_code');
       return;
     }
 
     const usersPool = (allUsers && allUsers.length > 0) ? allUsers : JSON.parse(localStorage.getItem('gas_delivery_users') || '[]');
     const referrer = usersPool.find((u: any) => 
-      u.referralCode && u.referralCode.toUpperCase() === pendingCode.toUpperCase() && u.id !== user.id
+      codeService.matchesReferralCode(u, pendingCode) && u.id !== user.id
     );
 
     if (referrer) {
@@ -618,6 +738,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       showPointsHistoryModal ||
       !!selectedRewardDetails ||
       !!rewardConfirmation ||
+      !!selectedViewRedemption ||
       !!deleteConfirmReferral ||
       !!referralActionModal ||
       !!celebrationModal ||
@@ -653,12 +774,27 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       return;
     }
 
+    // 1. Gera código único exclusivo no padrão RESG-XXXXXX
+    const uniqueCode = codeService.generateRedemptionCode();
+    const rewardExpiry = new Date(Date.now() + (reward.validityDays || 30) * 24 * 60 * 60 * 1000).toISOString();
+
+    let discountVal = 0;
+    if (reward.type === 'discount') {
+      discountVal = reward.value || 15;
+    } else if (reward.productId) {
+      const prod = PRODUCTS.find(p => p.id === reward.productId);
+      discountVal = prod?.price || reward.value || 0;
+    } else {
+      discountVal = reward.value || 0;
+    }
+
+    // 2. Histórico de pontos com menção ao código gerado
     const historyItem: PointHistoryItem = {
       id: 'redeem-' + Math.random().toString(36).substr(2, 9),
       userId: user.id,
       type: 'redeemed_reward',
       points: -reward.pointsCost,
-      description: `Resgate: ${reward.title}`,
+      description: `Resgate: ${reward.title} (Cód: ${uniqueCode})`,
       createdAt: new Date().toISOString()
     };
 
@@ -675,66 +811,31 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     };
     onUpdateUser(updatedUser);
 
-    const rewardExpiry = new Date(Date.now() + (reward.validityDays || 30) * 24 * 60 * 60 * 1000).toISOString();
+    // 3. Cria e salva o registro do resgate vinculado à conta do usuário
+    const newRedemption: RedeemedReward = {
+      id: 'red-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
+      code: uniqueCode,
+      rewardId: reward.id,
+      rewardTitle: reward.title,
+      rewardType: reward.type,
+      productId: reward.productId,
+      discountValue: discountVal,
+      pointsCost: reward.pointsCost,
+      minOrderValue: reward.minOrderValue || 0,
+      validUntil: rewardExpiry,
+      userId: user.id,
+      userName: user.name,
+      userPhone: user.phone || '',
+      status: 'active',
+      redeemedAt: new Date().toISOString()
+    };
 
-    if (reward.type === 'discount' && (reward.value || 15)) {
-      const discountVal = reward.value || 15;
-      const redeemedCoupon: Coupon = {
-        id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-        code: `RESGATE${discountVal}`,
-        type: 'fixed',
-        value: discountVal,
-        usageCount: 0,
-        isActive: true,
-        validUntil: rewardExpiry,
-        minOrderValue: reward.minOrderValue || 0
-      };
-      setAppliedCoupon(redeemedCoupon);
-      showToast(`🎁 Recompensa aplicada! Cupom ${redeemedCoupon.code} de R$ ${discountVal},00 ativado no seu carrinho.`);
-    } else if (reward.type === 'free_item' || reward.type === 'free_product') {
-      if (reward.productId) {
-        const prod = PRODUCTS.find(p => p.id === reward.productId);
-        const freeVal = prod?.price || reward.value || 0;
+    rewardService.saveRedeemedReward(newRedemption);
+    setRedeemedRewards(rewardService.getRedeemedRewards(user.id));
 
-        // Insere 1 unidade do produto no carrinho
-        setCart(prev => ({
-          ...prev,
-          [reward.productId!]: (prev[reward.productId!] || 0) + 1
-        }));
-
-        // Aplica o benefício de 100% de desconto desse produto
-        const cleanName = (prod?.name || 'PRODUTO').toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 8);
-        const redeemedCoupon: Coupon = {
-          id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-          code: `BRINDE-${cleanName}`,
-          type: 'fixed',
-          value: freeVal,
-          usageCount: 0,
-          isActive: true,
-          validUntil: rewardExpiry,
-          minOrderValue: reward.minOrderValue || 0
-        };
-        setAppliedCoupon(redeemedCoupon);
-        showToast(`🎁 Recompensa resgatada! 1x ${prod?.name || 'Produto'} foi adicionado grátis ao seu carrinho!`);
-      } else if (reward.value && reward.value > 0) {
-        const redeemedCoupon: Coupon = {
-          id: `REWARD-${Math.random().toString(36).substr(2, 6).toUpperCase()}`,
-          code: `BRINDE${Math.round(reward.value)}`,
-          type: 'fixed',
-          value: reward.value,
-          usageCount: 0,
-          isActive: true,
-          validUntil: rewardExpiry,
-          minOrderValue: reward.minOrderValue || 0
-        };
-        setAppliedCoupon(redeemedCoupon);
-        showToast(`🎁 Recompensa resgatada! Benefício de R$ ${reward.value.toFixed(2)} ativado.`);
-      } else {
-        showToast(`🎁 Recompensa resgatada com sucesso!`);
-      }
-    }
-
-    setRewardConfirmation({ reward, stage: 'success' });
+    // Exibe modal de confirmação em etapa 'success' com o código gerado
+    setRewardConfirmation({ reward, stage: 'success', code: uniqueCode });
+    showToast(`🎁 Recompensa resgatada com sucesso! Código gerado: ${uniqueCode}`);
   };
 
   const handleConfirmDeleteReferral = (referral: Referral) => {
@@ -924,6 +1025,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       const updatedUser = { ...user, addresses: [...(user.addresses || []), newAddress] };
       onUpdateUser(updatedUser);
       setSelectedAddress(newAddress);
+      showToast('Endereço salvo com sucesso!');
       
       // Limpar form
       setPendingAddress(null);
@@ -948,6 +1050,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   ) : 0;
 
   const cartTotal = Math.max(0, cartSubtotal - discountValue);
+  const cartCount = Object.values(cart).reduce<number>((acc, qty) => acc + (Number(qty) || 0), 0);
 
   const handleApplyCoupon = () => {
     setCouponError(null);
@@ -1007,8 +1110,52 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       return;
     }
 
-    // 2. Check if it's a referral code (check against allUsers or fallback)
-    const isOwnCode = user.referralCode && user.referralCode.toUpperCase() === code.toUpperCase();
+    // 2. Check if it's a redeemed reward code
+    const redeemedMatch = rewardService.findByCode(code);
+    if (redeemedMatch) {
+      if (redeemedMatch.userId !== user.id) {
+        setCouponError("Este código de resgate é exclusivo e pertence a outra conta.");
+        return;
+      }
+      if (redeemedMatch.status === 'used') {
+        setCouponError("Este código de resgate já foi utilizado.");
+        return;
+      }
+      const daysInfo = codeService.formatDaysRemaining(redeemedMatch.validUntil);
+      if (daysInfo.isExpired) {
+        setCouponError("Este código de resgate expirou.");
+        return;
+      }
+      if (redeemedMatch.minOrderValue && cartSubtotal < redeemedMatch.minOrderValue) {
+        setCouponError(`Pedido mínimo para este resgate: R$ ${redeemedMatch.minOrderValue.toFixed(2)}`);
+        return;
+      }
+
+      if ((redeemedMatch.rewardType === 'free_item' || redeemedMatch.rewardType === 'free_product') && redeemedMatch.productId) {
+        setCart(prev => ({
+          ...prev,
+          [redeemedMatch.productId!]: Math.max(1, (prev[redeemedMatch.productId!] || 0) + 1)
+        }));
+      }
+
+      const redeemedCoupon: Coupon = {
+        id: `REDEEM-${redeemedMatch.id}`,
+        code: redeemedMatch.code,
+        type: 'fixed',
+        value: redeemedMatch.discountValue || 0,
+        isActive: true,
+        usageCount: 0,
+        validUntil: redeemedMatch.validUntil || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        minOrderValue: redeemedMatch.minOrderValue || 0
+      };
+      setAppliedCoupon(redeemedCoupon);
+      setCouponCode('');
+      showToast(`🎁 Código de resgate ${redeemedMatch.code} ativado no carrinho!`);
+      return;
+    }
+
+    // 3. Check if it's a referral code (check against allUsers or fallback)
+    const isOwnCode = codeService.matchesReferralCode(user, code);
     if (isOwnCode) {
       setCouponError("Você não pode utilizar seu próprio código de indicação.");
       return;
@@ -1016,7 +1163,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
     const usersPool = (allUsers && allUsers.length > 0) ? allUsers : JSON.parse(localStorage.getItem('gas_delivery_users') || '[]');
     const referrer = usersPool.find((u: any) => 
-      u.referralCode && u.referralCode.toUpperCase() === code.toUpperCase() && u.id !== user.id
+      codeService.matchesReferralCode(u, code) && u.id !== user.id
     );
 
     if (referrer) {
@@ -1174,13 +1321,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         couponCode: appliedCoupon?.code,
         referralId: referrerId,
         paymentMethod: pendingPaymentMethod,
-        status: isSched ? 'Pendente' : 'Pendente',
+        status: 'Pendente',
         isScheduled: isSched,
-        scheduledDate: isSched ? scheduledDateInfo.display : undefined,
+        scheduledDate: isSched ? scheduledDateInfo.fullDisplay : undefined,
+        scheduledDateISO: isSched ? selectedScheduledDateISO : undefined,
         scheduledPeriod: isSched ? selectedPeriodId : undefined,
         scheduledPeriodName: isSched ? periodName : undefined,
         scheduledTimeRange: isSched ? schedRange : undefined,
-        feedback: isSched ? `[Agendado para: ${scheduledDateInfo.display} - ${periodName} (${schedRange})]` : undefined,
+        feedback: isSched ? `[Agendado para: ${scheduledDateInfo.fullDisplay} - ${periodName} (${schedRange})]` : undefined,
         createdAt: new Date().toISOString()
       };
 
@@ -1202,8 +1350,17 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         }
       }
 
-      if (appliedCoupon && !appliedCoupon.id.startsWith('REF-')) {
-        updatedUserObj.usedCoupons = [...(updatedUserObj.usedCoupons || []), appliedCoupon.id];
+      if (appliedCoupon) {
+        if (!appliedCoupon.id.startsWith('REF-')) {
+          updatedUserObj.usedCoupons = [...(updatedUserObj.usedCoupons || []), appliedCoupon.id];
+        }
+
+        // Se for um resgate de recompensa com código único, marca como usado
+        const matchedRedeem = rewardService.findByCode(appliedCoupon.code);
+        if (matchedRedeem) {
+          rewardService.markRedeemedRewardAsUsed(matchedRedeem.id, orderId);
+          setRedeemedRewards(rewardService.getRedeemedRewards(user.id));
+        }
       }
       
       // PONTOS: Concedidos apenas quando a entrega for concluída com sucesso!
@@ -1546,7 +1703,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
             )}
 
             {step === 'catalog' && (
-              <div className="p-4 max-w-2xl mx-auto">
+              <div className={`p-4 max-w-2xl mx-auto ${cartTotal > 0 ? 'pb-40' : 'pb-24'}`}>
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <MapPin className="text-yellow-500 w-4 h-4" />
@@ -1589,6 +1746,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       periods={activeDeliveryPeriods}
                       selectedId={selectedPeriodId}
                       onSelect={setSelectedPeriodId}
+                      availableDates={availableScheduledDates}
+                      selectedDateISO={selectedScheduledDateISO}
+                      onSelectDate={setSelectedScheduledDateISO}
                       dateInfo={scheduledDateInfo}
                     />
                   )}
@@ -1618,10 +1778,19 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   ))}
                 </div>
                 {cartTotal > 0 && (
-                  <div className="fixed bottom-20 left-0 right-0 p-4 bg-white border-t border-slate-200 shadow-lg z-40">
-                    <div className="max-w-2xl mx-auto flex items-center justify-between">
-                      <p className="text-xl font-black">R$ {cartTotal.toFixed(2)}</p>
-                      <button onClick={() => setStep('checkout')} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-black">FINALIZAR</button>
+                  <div className="fixed bottom-20 left-0 right-0 px-4 z-40 pointer-events-none">
+                    <div className="max-w-2xl mx-auto bg-slate-900/95 backdrop-blur-md text-white p-4 rounded-2xl shadow-2xl flex items-center justify-between pointer-events-auto border border-slate-800">
+                      <div>
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Subtotal ({cartCount} {cartCount === 1 ? 'item' : 'itens'})</p>
+                        <p className="text-xl font-black text-yellow-400">R$ {cartTotal.toFixed(2)}</p>
+                      </div>
+                      <button 
+                        onClick={() => setStep('checkout')} 
+                        className="bg-yellow-400 hover:bg-yellow-500 text-slate-950 px-6 py-3 rounded-xl font-black transition-all flex items-center gap-2 shadow-lg shadow-yellow-400/20 active:scale-95 cursor-pointer"
+                      >
+                        <span>FINALIZAR</span>
+                        <ChevronRight className="w-5 h-5 stroke-[3]" />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -1739,6 +1908,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       periods={activeDeliveryPeriods}
                       selectedId={selectedPeriodId}
                       onSelect={setSelectedPeriodId}
+                      availableDates={availableScheduledDates}
+                      selectedDateISO={selectedScheduledDateISO}
+                      onSelectDate={setSelectedScheduledDateISO}
                       dateInfo={scheduledDateInfo}
                     />
                   )}
@@ -2207,14 +2379,31 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       const progress = Math.min(100, (userPoints / reward.pointsCost) * 100);
                       const canRedeem = userPoints >= reward.pointsCost;
 
+                      // Resgate ativo para este card e usuário
+                      const activeRedemption = redeemedRewards.find(r => r.rewardId === reward.id && r.userId === user.id && r.status === 'active');
+                      const isRedeemed = !!activeRedemption;
+                      const daysInfo = activeRedemption ? codeService.formatDaysRemaining(activeRedemption.validUntil) : null;
+
                       return (
                         <div 
                           key={reward.id} 
-                          onClick={() => setSelectedRewardDetails(reward)}
-                          className="bg-white p-5 rounded-3xl border border-slate-100 shadow-sm flex flex-col cursor-pointer hover:border-yellow-300 hover:shadow-md transition-all group relative"
+                          onClick={() => {
+                            if (isRedeemed) {
+                              setSelectedViewRedemption(activeRedemption);
+                            } else {
+                              setSelectedRewardDetails(reward);
+                            }
+                          }}
+                          className={`bg-white p-5 rounded-3xl border shadow-sm flex flex-col cursor-pointer transition-all group relative ${
+                            isRedeemed 
+                              ? 'border-emerald-200 hover:border-emerald-400 hover:shadow-md ring-1 ring-emerald-100' 
+                              : 'border-slate-100 hover:border-yellow-300 hover:shadow-md'
+                          }`}
                         >
                           <div className="flex justify-between items-start mb-2">
-                            <div className="bg-slate-50 p-2.5 rounded-2xl group-hover:bg-yellow-50 transition-colors">
+                            <div className={`p-2.5 rounded-2xl transition-colors ${
+                              isRedeemed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 group-hover:bg-yellow-50'
+                            }`}>
                               {reward.productId && PRODUCTS.find(p => p.id === reward.productId)?.image ? (
                                 <img 
                                   src={PRODUCTS.find(p => p.id === reward.productId)?.image} 
@@ -2227,11 +2416,22 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                                 <Package className="text-green-500 w-6 h-6" />
                               )}
                             </div>
-                            <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black px-3 py-1 rounded-full">
-                              {reward.pointsCost} PTS
-                            </span>
+                            {isRedeemed ? (
+                              <span className="bg-emerald-100 text-emerald-800 text-[10px] font-black px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1">
+                                <Check className="w-3 h-3 stroke-[3]" />
+                                RESGATADO
+                              </span>
+                            ) : (
+                              <span className="bg-yellow-100 text-yellow-700 text-[10px] font-black px-3 py-1 rounded-full">
+                                {reward.pointsCost} PTS
+                              </span>
+                            )}
                           </div>
-                          <h4 className="font-black text-slate-900 group-hover:text-yellow-600 transition-colors">{reward.title}</h4>
+                          <h4 className={`font-black transition-colors ${
+                            isRedeemed ? 'text-slate-900 group-hover:text-emerald-700' : 'text-slate-900 group-hover:text-yellow-600'
+                          }`}>
+                            {reward.title}
+                          </h4>
                           {reward.productId && (
                             <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md inline-block w-fit mt-1">
                               ✓ Adiciona produto grátis no carrinho
@@ -2239,38 +2439,74 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           )}
                           <p className="text-xs text-slate-500 mt-1 mb-2 flex-1">{reward.description}</p>
 
-                          <div className="flex items-center gap-1 text-[11px] font-bold text-yellow-600 mb-3">
-                            <span>Ver regras e detalhes</span>
-                            <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-                          </div>
+                          {isRedeemed ? (
+                            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-100 mb-3">
+                              <span className="flex items-center gap-1.5">
+                                <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                                {daysInfo?.text || 'Expira em breve'}
+                              </span>
+                              <span className="text-[10px] uppercase font-black text-emerald-800 flex items-center gap-0.5">
+                                Ver Código <ChevronRight className="w-3 h-3" />
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-1 text-[11px] font-bold text-yellow-600 mb-3">
+                              <span>Ver regras e detalhes</span>
+                              <ChevronRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
+                            </div>
+                          )}
                           
                           <div className="mb-4">
-                            <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                              <div className="h-full bg-yellow-400 transition-all duration-500" style={{ width: `${progress}%` }}></div>
-                            </div>
-                            {!canRedeem && (
-                              <p className="text-[10px] text-slate-400 mt-1 text-right">Faltam {reward.pointsCost - userPoints} pts</p>
+                            {isRedeemed ? (
+                              <div className="bg-slate-50 px-3 py-2 rounded-xl border border-slate-100 flex items-center justify-between">
+                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-tight">Código Único:</span>
+                                <span className="text-xs font-mono font-black text-slate-900 bg-white px-2 py-0.5 rounded-md border border-slate-200">
+                                  {activeRedemption.code}
+                                </span>
+                              </div>
+                            ) : (
+                              <>
+                                <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                                  <div className="h-full bg-yellow-400 transition-all duration-500" style={{ width: `${progress}%` }}></div>
+                                </div>
+                                {!canRedeem && (
+                                  <p className="text-[10px] text-slate-400 mt-1 text-right">Faltam {reward.pointsCost - userPoints} pts</p>
+                                )}
+                              </>
                             )}
                           </div>
 
-                          <button 
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (canRedeem) {
-                                setRewardConfirmation({ reward, stage: 'confirm' });
-                              } else {
-                                setSelectedRewardDetails(reward);
-                              }
-                            }}
-                            disabled={!canRedeem}
-                            className={`w-full py-3 rounded-xl font-black text-xs transition-all ${
-                              canRedeem 
-                                ? 'bg-slate-900 text-white hover:bg-slate-800 shadow-md shadow-slate-900/10' 
-                                : 'bg-slate-100 text-slate-400 cursor-not-allowed'
-                            }`}
-                          >
-                            RESGATAR
-                          </button>
+                          {isRedeemed ? (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedViewRedemption(activeRedemption);
+                              }}
+                              className="w-full py-3 rounded-xl font-black text-xs transition-all bg-emerald-100 hover:bg-emerald-200 text-emerald-800 border border-emerald-300 shadow-sm flex items-center justify-center gap-1.5 active:scale-[0.99] cursor-pointer"
+                            >
+                              <Check className="w-4 h-4 text-emerald-700 stroke-[3]" />
+                              Resgatado
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (canRedeem) {
+                                  setRewardConfirmation({ reward, stage: 'confirm' });
+                                } else {
+                                  setSelectedRewardDetails(reward);
+                                }
+                              }}
+                              disabled={!canRedeem}
+                              className={`w-full py-3 rounded-xl font-black text-xs transition-all ${
+                                canRedeem 
+                                  ? 'bg-slate-900 text-white hover:bg-slate-800 shadow-md shadow-slate-900/10' 
+                                  : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                              }`}
+                            >
+                              RESGATAR
+                            </button>
+                          )}
                         </div>
                       );
                     })}
@@ -2723,6 +2959,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                                 const newAddresses = [...user.addresses!];
                                 newAddresses.splice(idx, 1);
                                 onUpdateUser({ ...user, addresses: newAddresses });
+                                showToast('Endereço removido.');
                               }
                             }}
                             className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors"
@@ -3787,25 +4024,77 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     Resgate Concluído! 🎉
                   </h3>
 
-                  <p className="text-sm text-slate-600 mb-4 leading-relaxed">
+                  <p className="text-sm text-slate-600 mb-3 leading-relaxed">
                     Você resgatou com sucesso <strong className="text-slate-950 font-black">{rewardConfirmation.reward.title}</strong>!
                   </p>
 
-                  <div className="bg-emerald-50 border border-emerald-100 p-3.5 rounded-2xl mb-4 text-xs text-emerald-800">
+                  {rewardConfirmation.code && (
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border-2 border-dashed border-emerald-300 mb-3 text-center">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest block mb-1">Seu Código Único de Resgate</span>
+                      <div className="flex items-center justify-center gap-2">
+                        <span className="font-mono text-xl font-black text-emerald-950 tracking-wider">
+                          {rewardConfirmation.code}
+                        </span>
+                        <button
+                          onClick={() => {
+                            if (rewardConfirmation.code) {
+                              navigator.clipboard.writeText(rewardConfirmation.code);
+                              showToast(`Código ${rewardConfirmation.code} copiado com sucesso!`);
+                            }
+                          }}
+                          className="p-1.5 hover:bg-emerald-100 rounded-lg text-emerald-700 transition-colors"
+                          title="Copiar Código"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <p className="text-[10px] text-emerald-700 font-bold mt-1">
+                        ⏱️ Expira em {rewardConfirmation.reward.validityDays || 30} dias • Vinculado à sua conta
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="bg-emerald-50 border border-emerald-100 p-3 rounded-2xl mb-3 text-xs text-emerald-800">
                     <p className="font-bold">Novo saldo disponível:</p>
                     <p className="text-lg font-black text-emerald-950">{user.points || 0} pontos</p>
                   </div>
 
                   {rewardConfirmation.reward.productId && (
-                    <div className="bg-amber-50 border border-amber-200 p-3.5 rounded-2xl mb-5 text-xs text-amber-900 flex items-center gap-2.5 text-left">
+                    <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl mb-4 text-xs text-amber-900 flex items-center gap-2.5 text-left">
                       <Package className="w-5 h-5 text-amber-600 shrink-0" />
-                      <span>1 unidade de <strong>{PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.name || 'Produto'}</strong> foi inserida gratuitamente no seu carrinho!</span>
+                      <span>1 unidade de <strong>{PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.name || 'Produto'}</strong> pronta para inclusão grátis!</span>
                     </div>
                   )}
 
                   <div className="space-y-2">
                     <button
                       onClick={() => {
+                        if (rewardConfirmation.code) {
+                          const discountVal = rewardConfirmation.reward.type === 'discount' 
+                            ? (rewardConfirmation.reward.value || 15) 
+                            : (rewardConfirmation.reward.productId ? (PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.price || rewardConfirmation.reward.value || 0) : (rewardConfirmation.reward.value || 0));
+
+                          const rewardExpiry = new Date(Date.now() + (rewardConfirmation.reward.validityDays || 30) * 24 * 60 * 60 * 1000).toISOString();
+                          const couponObj: Coupon = {
+                            id: `REDEEM-${rewardConfirmation.code}`,
+                            code: rewardConfirmation.code,
+                            type: 'fixed',
+                            value: discountVal,
+                            isActive: true,
+                            usageCount: 0,
+                            validUntil: rewardExpiry,
+                            minOrderValue: rewardConfirmation.reward.minOrderValue || 0
+                          };
+
+                          if (rewardConfirmation.reward.productId) {
+                            setCart(prev => ({
+                              ...prev,
+                              [rewardConfirmation.reward.productId!]: Math.max(1, (prev[rewardConfirmation.reward.productId!] || 0) + 1)
+                            }));
+                          }
+
+                          setAppliedCoupon(couponObj);
+                        }
                         setRewardConfirmation(null);
                         setActiveTab('home');
                         setStep('checkout');
@@ -3813,7 +4102,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       className="w-full bg-yellow-400 hover:bg-yellow-500 text-slate-950 font-black py-3.5 rounded-2xl text-xs transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer active:scale-95"
                     >
                       <ShoppingCart className="w-4 h-4 text-slate-950 stroke-[2.5]" />
-                      IR PARA O CARRINHO E FINALIZAR
+                      USAR NO MEU PEDIDO AGORA
                     </button>
                     <button
                       onClick={() => setRewardConfirmation(null)}
@@ -3824,6 +4113,141 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </div>
                 </>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal de Visualização do Código Resgatado ("Expira em xx dias") */}
+      <AnimatePresence>
+        {selectedViewRedemption && (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[9999] flex items-center justify-center p-4 overscroll-contain">
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="bg-white w-full max-w-sm rounded-3xl shadow-2xl p-6 text-center overflow-hidden border border-slate-100 relative"
+            >
+              <button
+                onClick={() => setSelectedViewRedemption(null)}
+                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-3 shadow-md shadow-emerald-500/10">
+                <Gift className="w-7 h-7 stroke-[2.5]" />
+              </div>
+
+              <span className="text-[10px] uppercase font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-3 py-0.5 rounded-full inline-block mb-1.5">
+                ✓ Recompensa Resgatada
+              </span>
+
+              <h3 className="text-lg font-black text-slate-900 mb-1 leading-tight">
+                {selectedViewRedemption.rewardTitle}
+              </h3>
+
+              {/* Caixa do Código com botão de cópia */}
+              <div className="bg-slate-50 p-4 rounded-2xl border-2 border-dashed border-emerald-300 my-4 text-center">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-1.5">Código Único de Resgate</span>
+                <div className="flex items-center justify-center gap-3">
+                  <span className="font-mono text-2xl font-black text-slate-950 tracking-wider">
+                    {selectedViewRedemption.code}
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(selectedViewRedemption.code);
+                      setCopiedRedemptionCode(true);
+                      showToast(`Código ${selectedViewRedemption.code} copiado!`);
+                      setTimeout(() => setCopiedRedemptionCode(false), 2000);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white p-2 rounded-xl transition-all shadow-sm active:scale-95 cursor-pointer"
+                    title="Copiar Código"
+                  >
+                    {copiedRedemptionCode ? <Check className="w-4 h-4 stroke-[3]" /> : <Copy className="w-4 h-4" />}
+                  </button>
+                </div>
+                {copiedRedemptionCode && (
+                  <span className="text-[10px] font-bold text-emerald-600 mt-1 block">✓ Copiado para a área de transferência!</span>
+                )}
+              </div>
+
+              {/* Informações de Validade e Vinculação */}
+              <div className="space-y-2 mb-5 text-left text-xs">
+                {/* Expira em xx dia(s) */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-amber-50/80 border border-amber-200/80 text-amber-900">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                    Validade:
+                  </span>
+                  <span className="font-black text-amber-950">
+                    {codeService.formatDaysRemaining(selectedViewRedemption.validUntil).text}
+                  </span>
+                </div>
+
+                {/* Vinculado à conta */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-slate-50 border border-slate-100 text-slate-600">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <User className="w-4 h-4 text-slate-400 shrink-0" />
+                    Vinculado a:
+                  </span>
+                  <span className="font-black text-slate-800 truncate max-w-[170px]">
+                    {selectedViewRedemption.userName || user.name}
+                  </span>
+                </div>
+
+                {/* Status */}
+                <div className="flex items-center justify-between p-3 rounded-2xl bg-emerald-50/60 border border-emerald-100 text-emerald-800">
+                  <span className="font-bold flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    Status:
+                  </span>
+                  <span className="font-black text-emerald-700">
+                    Disponível até ser usado
+                  </span>
+                </div>
+              </div>
+
+              {/* Ações */}
+              <div className="space-y-2">
+                <button
+                  onClick={() => {
+                    const couponObj: Coupon = {
+                      id: `REDEEM-${selectedViewRedemption.id}`,
+                      code: selectedViewRedemption.code,
+                      type: 'fixed',
+                      value: selectedViewRedemption.discountValue || 0,
+                      isActive: true,
+                      usageCount: 0,
+                      validUntil: selectedViewRedemption.validUntil || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+                      minOrderValue: selectedViewRedemption.minOrderValue || 0
+                    };
+
+                    if ((selectedViewRedemption.rewardType === 'free_item' || selectedViewRedemption.rewardType === 'free_product') && selectedViewRedemption.productId) {
+                      setCart(prev => ({
+                        ...prev,
+                        [selectedViewRedemption.productId!]: Math.max(1, (prev[selectedViewRedemption.productId!] || 0) + 1)
+                      }));
+                    }
+
+                    setAppliedCoupon(couponObj);
+                    setSelectedViewRedemption(null);
+                    setActiveTab('home');
+                    setStep('checkout');
+                    showToast(`🎁 Código ${selectedViewRedemption.code} ativado no seu pedido!`);
+                  }}
+                  className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl text-xs flex items-center justify-center gap-2 transition-all shadow-lg shadow-slate-900/15 cursor-pointer active:scale-95"
+                >
+                  <ShoppingCart className="w-4 h-4 text-yellow-400 stroke-[2.5]" />
+                  USAR NO MEU PEDIDO AGORA
+                </button>
+                <button
+                  onClick={() => setSelectedViewRedemption(null)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 font-black py-2.5 rounded-2xl text-xs transition-colors cursor-pointer"
+                >
+                  Fechar
+                </button>
+              </div>
             </motion.div>
           </div>
         )}
