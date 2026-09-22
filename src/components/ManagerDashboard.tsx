@@ -60,6 +60,29 @@ let DefaultIcon = L.icon({
     iconAnchor: [12, 41]
 });
 L.Marker.prototype.options.icon = DefaultIcon;
+
+export const getTodayISO = () => {
+  const d = new Date();
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+export const isOrderFutureScheduled = (o: Order) => {
+  if (!o.isScheduled || o.isForceActivated) return false;
+  if (o.status === 'Concluído' || o.status === 'Cancelado') return false;
+  
+  const todayISO = getTodayISO();
+  if (o.scheduledDateISO) {
+    return o.scheduledDateISO > todayISO;
+  }
+  const createdDateISO = new Date(o.createdAt).toISOString().split('T')[0];
+  if (createdDateISO < todayISO) {
+    return false;
+  }
+  return false;
+};
 import { PRODUCTS } from '../constants';
 
 interface ManagerDashboardProps {
@@ -927,19 +950,23 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
 
           {activeTab === 'tracking' && (() => {
+            const futureScheduledOrders = orders
+              .filter(o => (o.status === 'Pendente' || o.status === 'Atribuído') && isOrderFutureScheduled(o) && matchesOrderSearch(o, orderSearchQuery))
+              .sort((a, b) => (a.scheduledDateISO || a.createdAt).localeCompare(b.scheduledDateISO || b.createdAt));
+
             const pendingOrders = orders
-              .filter(o => o.status === 'Pendente' && matchesOrderSearch(o, orderSearchQuery))
+              .filter(o => o.status === 'Pendente' && !isOrderFutureScheduled(o) && matchesOrderSearch(o, orderSearchQuery))
               .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
             const assignedOrders = orders
-              .filter(o => o.status === 'Atribuído' && matchesOrderSearch(o, orderSearchQuery))
+              .filter(o => o.status === 'Atribuído' && !isOrderFutureScheduled(o) && matchesOrderSearch(o, orderSearchQuery))
               .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
             const inRouteOrders = orders
               .filter(o => o.status === 'Em Rota' && matchesOrderSearch(o, orderSearchQuery))
               .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
-            const totalMatchingActive = pendingOrders.length + assignedOrders.length + inRouteOrders.length;
+            const totalMatchingActive = pendingOrders.length + assignedOrders.length + inRouteOrders.length + futureScheduledOrders.length;
 
             return (
               <motion.div key="tracking" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
@@ -1014,7 +1041,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <>
+                  <React.Fragment>
                 {/* 1. SEÇÃO: PEDIDOS PENDENTES */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
@@ -1354,7 +1381,133 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     </div>
                   )}
                 </div>
-                </>
+
+                {/* 4. SEÇÃO: AGENDA DE ENTREGAS AGENDADAS (PRÓXIMOS DIAS) */}
+                <div className="space-y-3 pt-6 border-t border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full bg-purple-600 animate-pulse"></div>
+                      <h3 className="font-black text-lg text-purple-950 flex items-center gap-2">
+                        <Calendar className="w-5 h-5 text-purple-600" />
+                        Agenda de Agendamentos Futuros <span className="text-purple-700 font-bold text-sm">({futureScheduledOrders.length})</span>
+                      </h3>
+                    </div>
+                    <span className="text-xs text-slate-500 font-bold hidden sm:inline">
+                      Entregas agendadas para os próximos dias (não poluem os pendentes de hoje)
+                    </span>
+                  </div>
+
+                  {futureScheduledOrders.length === 0 ? (
+                    <div className="bg-purple-50/50 rounded-3xl p-6 text-center border border-dashed border-purple-200 text-purple-800">
+                      <Calendar className="w-8 h-8 mx-auto mb-2 text-purple-400" />
+                      <p className="font-bold text-xs">Nenhum pedido agendado para datas futuras no momento.</p>
+                      <p className="text-[11px] text-purple-600 mt-0.5">Os agendamentos feitos pelos clientes aparecerão aqui organizados por data.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {futureScheduledOrders.map(o => {
+                        const ordersCount = getCustomerOrdersCount(o.customerId, o.phone);
+                        const itemsSummary = o.items.map(it => {
+                          const p = PRODUCTS.find(pr => pr.id === it.productId);
+                          return `${it.quantity}x ${p?.name || 'Item'}`;
+                        }).join(' + ');
+
+                        return (
+                          <div 
+                            key={o.id}
+                            onClick={() => setSelectedOrderDetails(o)}
+                            className="bg-white rounded-3xl p-5 border-2 border-purple-300 shadow-sm hover:shadow-xl transition-all cursor-pointer relative overflow-hidden group flex flex-col justify-between"
+                          >
+                            <div className="absolute top-0 left-0 right-0 h-1.5 bg-purple-500"></div>
+
+                            <div>
+                              <div className="flex justify-between items-start mb-3">
+                                <div>
+                                  <span className="text-[10px] font-black bg-purple-100 text-purple-800 px-2 py-0.5 rounded-md uppercase">#{o.id}</span>
+                                  <div className="flex items-center gap-1.5 mt-1.5">
+                                    <h4 className="font-black text-base text-slate-900 group-hover:text-purple-700 transition-colors">{o.customerName}</h4>
+                                    <span className="text-[9px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
+                                      {ordersCount <= 1 ? '1º pedido' : `${ordersCount}º pedido`}
+                                    </span>
+                                  </div>
+                                  {o.phone && (
+                                    <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1 mt-0.5">
+                                      <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                      <span>{o.phone}</span>
+                                    </p>
+                                  )}
+                                </div>
+                                
+                                <div className="text-right">
+                                  <span className="text-[10px] font-black text-purple-700 bg-purple-100 px-2.5 py-1 rounded-xl block border border-purple-200">
+                                    🗓️ Agendado
+                                  </span>
+                                  <span className="text-[10px] font-bold text-slate-400 uppercase mt-1 block">Futuro</span>
+                                </div>
+                              </div>
+
+                              <div className="bg-purple-50/90 border border-purple-300 text-purple-950 rounded-2xl p-3 mb-3 shadow-xs space-y-1">
+                                <p className="text-xs font-black flex items-center gap-1.5">
+                                  <Calendar className="w-3.5 h-3.5 text-purple-700 shrink-0" />
+                                  <span>{o.scheduledDate || 'Data Futura'}</span>
+                                </p>
+                                <p className="text-[11px] text-purple-800 font-bold flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-purple-600 shrink-0" />
+                                  <span>Turno {o.scheduledPeriodName || o.scheduledPeriod} ({o.scheduledTimeRange || 'Horário agendado'})</span>
+                                </p>
+                              </div>
+
+                              <div className="bg-slate-50 rounded-2xl p-3 my-2 space-y-1.5 border border-slate-100 text-xs">
+                                <div className="flex items-center justify-between font-bold text-slate-800">
+                                  <span className="truncate max-w-[170px]" title={itemsSummary}>{itemsSummary}</span>
+                                  <span className="whitespace-nowrap font-black">R$ {o.total.toFixed(2)}</span>
+                                </div>
+                                <div className="flex items-center justify-between text-[11px] text-slate-500">
+                                  <span>Pagamento: <strong className="text-slate-800">{o.paymentMethod}</strong></span>
+                                  {o.couponCode && (
+                                    <span className="text-emerald-700 bg-emerald-100 px-1.5 rounded font-black text-[9px]">
+                                      {o.couponCode}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-slate-500 truncate pt-1 border-t border-slate-200/60 flex items-center gap-1">
+                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                  <span className="truncate">{o.address.street}, {o.address.number} • {o.address.neighborhood}</span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="pt-2 grid grid-cols-2 gap-2 border-t border-slate-100 mt-2">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const updated = { ...o, isForceActivated: true };
+                                  onUpdateOrder(updated);
+                                }}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-[11px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                                title="Mover este pedido imediatamente para a fila de pendentes de hoje"
+                              >
+                                ⚡ Ativar Agora
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setAssigningOrder(o);
+                                }}
+                                className="bg-slate-900 hover:bg-yellow-500 hover:text-slate-950 text-white font-black text-[11px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                              >
+                                <Truck className="w-3.5 h-3.5" /> Atribuir
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                </React.Fragment>
                 )}
 
               </motion.div>
@@ -2956,7 +3109,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       {o.isScheduled && (
                         <div className="mt-2.5 bg-purple-500/30 border border-purple-400/50 rounded-xl px-3 py-1.5 flex items-center gap-2 text-purple-200 text-xs font-bold">
                           <Calendar className="w-4 h-4 text-purple-300 flex-shrink-0" />
-                          <span>Pedido Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod === 'noite' ? 'Noite' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
+                          <span>Pedido Agendado para: <strong className="text-purple-100">{o.scheduledDate || 'Data Futura'}</strong> — Turno {o.scheduledPeriodName || o.scheduledPeriod || 'Turno'}{o.scheduledTimeRange ? ` (${o.scheduledTimeRange})` : ''}</span>
                         </div>
                       )}
                     </div>
@@ -2964,11 +3117,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     {/* Relógio em Destaque */}
                     <div className="bg-slate-800/90 border border-slate-700 rounded-2xl p-2.5 sm:p-3 text-right shrink-0">
                       <span className="text-[10px] uppercase font-bold text-slate-400 block">
-                        {o.status === 'Concluído' ? 'Tempo de Entrega' : o.status === 'Cancelado' ? 'Tempo até Cancelar' : 'Tempo Decorrido'}
+                        {o.status === 'Concluído' ? 'Tempo de Entrega' : o.status === 'Cancelado' ? 'Tempo até Cancelar' : o.isScheduled ? 'Status' : 'Tempo Decorrido'}
                       </span>
                       <div className="flex items-center gap-1.5 text-yellow-400 font-black text-base sm:text-lg mt-0.5">
                         <Clock className={`w-4 h-4 sm:w-5 sm:h-5 ${o.status !== 'Concluído' && o.status !== 'Cancelado' ? 'animate-pulse' : ''}`} />
-                        <span>{elapsed} min</span>
+                        <span>{o.isScheduled && isOrderFutureScheduled(o) ? 'Agendado' : `${elapsed} min`}</span>
                       </div>
                     </div>
                   </div>
