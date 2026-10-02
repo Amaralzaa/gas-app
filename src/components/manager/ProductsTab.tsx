@@ -157,20 +157,35 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
     setIsQuickEditOpen(true);
   };
 
+  // Fechar modal completo e limpar estado de edição
+  const handleCloseFullModal = () => {
+    setIsFullModalOpen(false);
+    setEditingProduct(null);
+  };
+
+  // Estado de salvamento em andamento
+  const [isSaving, setIsSaving] = useState(false);
+
   // Submissão do formulário completo
   const handleSaveFullForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const numPrice = parseFloat(formData.price.replace(',', '.')) || 0;
+    const cleanPrice = String(formData.price || '').replace(',', '.').trim();
+    const numPrice = parseFloat(cleanPrice) || 0;
     if (numPrice <= 0) {
-      alert('Informe um valor de preço válido maior que zero.');
+      alert('Informe um valor de preço válido (maior que zero).');
       return;
     }
 
-    const pixVal = parseFloat(formData.pixDiscountValue.replace(',', '.')) || 0;
-    const cashVal = parseFloat(formData.cashDiscountValue.replace(',', '.')) || 0;
+    const cleanPix = String(formData.pixDiscountValue || '').replace(',', '.').trim();
+    const pixVal = parseFloat(cleanPix) || 0;
+
+    const cleanCash = String(formData.cashDiscountValue || '').replace(',', '.').trim();
+    const cashVal = parseFloat(cleanCash) || 0;
+
+    const prodId = editingProduct ? editingProduct.id : (formData.id || 'prod-' + Math.random().toString(36).substr(2, 8));
 
     const newProduct: Product = {
-      id: formData.id || 'prod-' + Math.random().toString(36).substr(2, 8),
+      id: prodId,
       name: formData.name.trim(),
       category: formData.category,
       unit: formData.unit.trim(),
@@ -192,15 +207,22 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
       updatedAt: new Date().toISOString()
     };
 
-    if (editingProduct) {
-      await onUpdateProduct(newProduct);
-      showToast(`Produto "${newProduct.name}" atualizado com sucesso!`);
-    } else {
-      await onAddProduct(newProduct);
-      showToast(`Produto "${newProduct.name}" cadastrado com sucesso!`);
+    try {
+      setIsSaving(true);
+      if (editingProduct) {
+        await onUpdateProduct(newProduct);
+        showToast(`Produto "${newProduct.name}" atualizado com sucesso!`);
+      } else {
+        await onAddProduct(newProduct);
+        showToast(`Produto "${newProduct.name}" cadastrado com sucesso!`);
+      }
+      handleCloseFullModal();
+    } catch (err: any) {
+      console.error('Erro ao salvar produto:', err);
+      alert('Ocorreu um erro ao salvar o produto: ' + (err?.message || 'Tente novamente'));
+    } finally {
+      setIsSaving(false);
     }
-
-    setIsFullModalOpen(false);
   };
 
   // Alternar status ativo/inativo
@@ -757,8 +779,8 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsFullModalOpen(false)}
-                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white"
+                  onClick={handleCloseFullModal}
+                  className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -949,12 +971,11 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
                         R$
                       </span>
                       <input
-                        type="number"
-                        step="0.01"
-                        min="0"
+                        type="text"
+                        inputMode="decimal"
                         required
                         value={formData.price}
-                        onChange={(e) => setFormData({ ...formData, price: e.target.value })}
+                        onChange={(e) => setFormData({ ...formData, price: e.target.value.replace(/[^0-9.,]/g, '') })}
                         placeholder="115.00"
                         className="w-full pl-12 pr-4 py-3 bg-white border border-slate-300 focus:border-yellow-400 rounded-xl text-xl font-black text-slate-900 outline-none"
                       />
@@ -1018,11 +1039,10 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
                               {formData.pixDiscountType === 'fixed' ? 'R$' : '%'}
                             </span>
                             <input
-                              type="number"
-                              step="0.01"
-                              min="0"
+                              type="text"
+                              inputMode="decimal"
                               value={formData.pixDiscountValue}
-                              onChange={(e) => setFormData({ ...formData, pixDiscountValue: e.target.value })}
+                              onChange={(e) => setFormData({ ...formData, pixDiscountValue: e.target.value.replace(/[^0-9.,]/g, '') })}
                               placeholder={formData.pixDiscountType === 'fixed' ? '10.00' : '10'}
                               className="w-full pl-8 pr-3 py-2 bg-white border border-emerald-300 focus:border-emerald-500 rounded-xl text-sm font-bold text-slate-900 outline-none"
                             />
@@ -1096,11 +1116,10 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
                               {formData.cashDiscountType === 'fixed' ? 'R$' : '%'}
                             </span>
                             <input
-                              type="number"
-                              step="0.01"
-                              min="0"
+                              type="text"
+                              inputMode="decimal"
                               value={formData.cashDiscountValue}
-                              onChange={(e) => setFormData({ ...formData, cashDiscountValue: e.target.value })}
+                              onChange={(e) => setFormData({ ...formData, cashDiscountValue: e.target.value.replace(/[^0-9.,]/g, '') })}
                               placeholder={formData.cashDiscountType === 'fixed' ? '10.00' : '10'}
                               className="w-full pl-8 pr-3 py-2 bg-white border border-amber-300 focus:border-amber-500 rounded-xl text-sm font-bold text-slate-900 outline-none"
                             />
@@ -1122,17 +1141,24 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
                 <div className="pt-4 flex items-center justify-end gap-3 border-t border-slate-100">
                   <button
                     type="button"
-                    onClick={() => setIsFullModalOpen(false)}
-                    className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold text-xs transition-all"
+                    onClick={handleCloseFullModal}
+                    className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-100 font-bold text-xs transition-all cursor-pointer"
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
-                    className="px-6 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-slate-950 font-black text-xs transition-all flex items-center gap-2 shadow-md shadow-yellow-400/20"
+                    disabled={isSaving}
+                    className="px-6 py-2.5 rounded-xl bg-yellow-400 hover:bg-yellow-300 disabled:opacity-50 active:scale-95 text-slate-950 font-black text-xs transition-all flex items-center gap-2 shadow-md shadow-yellow-400/20 cursor-pointer"
                   >
-                    <Check className="w-4 h-4" />
-                    <span>{editingProduct ? 'Salvar Alterações' : 'Cadastrar Produto'}</span>
+                    {isSaving ? (
+                      <span>Salvando...</span>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>{editingProduct ? 'Salvar Alterações' : 'Cadastrar Produto'}</span>
+                      </>
+                    )}
                   </button>
                 </div>
               </form>

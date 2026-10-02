@@ -10,12 +10,18 @@ export const productService = {
    * Obtém a lista de produtos (Supabase com fallback imediato no LocalStorage)
    */
   async getProducts(): Promise<Product[]> {
-    // 1. Tentar ler do Supabase se disponível
+    // 1. Tentar ler do Supabase com timeout rápido para não travar
     try {
-      const { data, error } = await supabase
+      const fetchPromise = supabase
         .from('products')
         .select('*')
         .order('name', { ascending: true });
+
+      const timeoutPromise = new Promise<{ data: null; error: any }>((res) => 
+        setTimeout(() => res({ data: null, error: { message: 'timeout' } }), 1200)
+      );
+
+      const { data, error } = await Promise.race([fetchPromise, timeoutPromise]);
 
       if (!error && Array.isArray(data) && data.length > 0) {
         const mapped: Product[] = data.map(this.mapFromDb);
@@ -45,21 +51,24 @@ export const productService = {
   },
 
   /**
-   * Salva a lista completa de produtos (LocalStorage + BroadcastChannel + Supabase)
+   * Salva a lista completa de produtos (LocalStorage + BroadcastChannel + Supabase em background)
    */
   async saveProducts(products: Product[]): Promise<void> {
+    // 1. Salva imediatamente no LocalStorage e notifica abas conectadas
     this.saveToLocalCache(products, true);
 
-    // Tentar persistir no Supabase em segundo plano
-    try {
-      const dbRows = products.map(p => this.mapToDb(p));
-      const { error } = await supabase.from('products').upsert(dbRows);
-      if (error) {
-        console.warn('Erro ao sincronizar produtos com Supabase (tabela pode não existir ainda):', error.message);
+    // 2. Persistir no Supabase em segundo plano de forma não-bloqueante
+    (async () => {
+      try {
+        const dbRows = products.map(p => this.mapToDb(p));
+        const { error } = await supabase.from('products').upsert(dbRows);
+        if (error) {
+          console.warn('Supabase: tabela "products" ainda não criada ou sincronização pendente:', error.message);
+        }
+      } catch (err) {
+        console.warn('Supabase offline ou tabela inexistente:', err);
       }
-    } catch (err) {
-      console.warn('Supabase offline ou tabela inexistente:', err);
-    }
+    })();
   },
 
   /**

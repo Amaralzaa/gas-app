@@ -1144,7 +1144,6 @@ export default function App() {
                 allCollaborators={allUsers.filter(u => u.role === 'gestor' || u.role === 'admin')}
                 businessInfo={businessInfo}
                 products={products}
-                onUpdateProductPrice={handleUpdateProductPrice}
               />
             </motion.div>
           )}
