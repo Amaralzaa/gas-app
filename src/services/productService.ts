@@ -69,7 +69,9 @@ export const productService = {
     productId: string,
     newPrice: number,
     pixDiscountValue?: number,
-    cashDiscountValue?: number
+    cashDiscountValue?: number,
+    pixType?: 'fixed' | 'percentage',
+    cashType?: 'fixed' | 'percentage'
   ): Promise<Product[]> {
     const currentProducts = await this.getProducts();
     const updated = currentProducts.map(p => {
@@ -79,12 +81,12 @@ export const productService = {
         price: Number(newPrice),
         pixDiscount: pixDiscountValue !== undefined ? {
           enabled: pixDiscountValue > 0,
-          type: p.pixDiscount?.type || 'fixed',
+          type: pixType || p.pixDiscount?.type || 'fixed',
           value: Number(pixDiscountValue)
         } : p.pixDiscount,
         cashDiscount: cashDiscountValue !== undefined ? {
           enabled: cashDiscountValue > 0,
-          type: p.cashDiscount?.type || 'fixed',
+          type: cashType || p.cashDiscount?.type || 'fixed',
           value: Number(cashDiscountValue)
         } : p.cashDiscount,
         updatedAt: new Date().toISOString()

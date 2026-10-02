@@ -33,15 +33,18 @@ import {
   ChevronUp,
   FileText,
   Printer,
-  Navigation
+  Navigation,
+  Edit2,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import L from 'leaflet';
 import { AppUser, Order, Expense, Product, Address, BusinessInfo } from '../types';
-import { PRODUCTS } from '../constants';
+import { PRODUCTS, calculateEffectivePrice } from '../constants';
 import { playAssignedOrderSound, unlockAudio } from '../utils/sounds';
 import { showSafeNotification } from '../utils/notifications';
+import { QuickPriceEditModal } from './manager/QuickPriceEditModal';
 
 interface DeliveryDashboardProps {
   user: AppUser;
@@ -54,6 +57,15 @@ interface DeliveryDashboardProps {
   allCustomers: AppUser[];
   allCollaborators?: AppUser[];
   businessInfo?: BusinessInfo;
+  products?: Product[];
+  onUpdateProductPrice?: (
+    productId: string, 
+    newPrice: number, 
+    pixDiscountValue?: number, 
+    cashDiscountValue?: number,
+    pixType?: 'fixed' | 'percentage',
+    cashType?: 'fixed' | 'percentage'
+  ) => Promise<void> | void;
 }
 
 export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({ 
@@ -64,12 +76,19 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   onAddExpense, 
   onUpdateUser, 
   expenses, 
-  allCustomers,
+  allCustomers, 
   allCollaborators = [],
-  businessInfo 
+  businessInfo,
+  products = [],
+  onUpdateProductPrice
 }) => {
-  const [activeTab, setActiveTab] = useState<'deliveries' | 'map' | 'finance'>('deliveries');
+  const productsList = (products && products.length > 0) ? products : PRODUCTS;
+  const [activeTab, setActiveTab] = useState<'deliveries' | 'map' | 'products' | 'finance'>('deliveries');
   
+  // Modal de Edição Rápida de Preço (pelo Entregador)
+  const [isQuickPriceModalOpen, setIsQuickPriceModalOpen] = useState(false);
+  const [selectedProductForPriceEdit, setSelectedProductForPriceEdit] = useState<Product | null>(null);
+
   // Modais de Ação
   const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
   const [isAddingSale, setIsAddingSale] = useState(false);
@@ -410,10 +429,11 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
   const cartTotal = useMemo(() => {
     return Object.entries(cart).reduce((acc, [id, qty]) => {
-      const product = PRODUCTS.find(p => p.id === id);
-      return acc + (product?.price || 0) * (qty as number);
+      const product = productsList.find(p => p.id === id);
+      const effective = product ? calculateEffectivePrice(product, selectedPaymentMethod) : 0;
+      return acc + effective * (qty as number);
     }, 0);
-  }, [cart]);
+  }, [cart, productsList, selectedPaymentMethod]);
 
   const handleCompleteOrder = (order: Order) => {
     onUpdateOrder({ 
@@ -476,11 +496,14 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       address,
       items: Object.entries(cart)
         .filter(([_, qty]) => (qty as number) > 0)
-        .map(([id, qty]) => ({
-          productId: id,
-          quantity: qty as number,
-          priceAtTime: PRODUCTS.find(p => p.id === id)?.price || 0
-        })),
+        .map(([id, qty]) => {
+          const product = productsList.find(p => p.id === id);
+          return {
+            productId: id,
+            quantity: qty as number,
+            priceAtTime: product ? calculateEffectivePrice(product, selectedPaymentMethod) : 0
+          };
+        }),
       total: cartTotal,
       paymentMethod: selectedPaymentMethod,
       status: 'Concluído',
@@ -614,12 +637,12 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
       {/* SEGUNDA LINHA: Apenas as abas navegáveis, sem segundo cabeçalho */}
       <nav className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800/90 px-3 py-2 shrink-0 z-30 shadow-md">
-        <div className="grid grid-cols-3 gap-2 max-w-md mx-auto">
+        <div className="grid grid-cols-4 gap-1.5 max-w-lg mx-auto">
           {/* Aba Entregas */}
           <button
             type="button"
             onClick={() => setActiveTab('deliveries')}
-            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
               activeTab === 'deliveries'
                 ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
                 : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
@@ -640,7 +663,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           <button
             type="button"
             onClick={() => setActiveTab('map')}
-            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+            className={`flex items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
               activeTab === 'map'
                 ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
                 : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
@@ -653,18 +676,32 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
             )}
           </button>
 
-          {/* Aba Financeiro */}
+          {/* Aba Produtos */}
           <button
             type="button"
-            onClick={() => setActiveTab('finance')}
-            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
-              activeTab === 'finance'
+            onClick={() => setActiveTab('products')}
+            className={`flex items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'products'
                 ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
                 : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
             }`}
           >
             <DollarSign className="w-4 h-4 shrink-0" />
-            <span>Financeiro</span>
+            <span>Produtos</span>
+          </button>
+
+          {/* Aba Financeiro */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('finance')}
+            className={`flex items-center justify-center gap-1.5 py-2.5 px-1.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'finance'
+                ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
+                : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Wallet className="w-4 h-4 shrink-0" />
+            <span>Caixa</span>
           </button>
         </div>
       </nav>
@@ -983,7 +1020,93 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* ABA 3: FINANCEIRO & PRESTAÇÃO DE CONTAS (CLEAN & MODERNO) */}
+          {/* ABA 3: CATÁLOGO DE PRODUTOS & AJUSTE DE VALOR (ENTREGADOR) */}
+          {/* ========================================================= */}
+          {activeTab === 'products' && (
+            <motion.div
+              key="products"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 overflow-y-auto p-4 pb-28 space-y-3.5 max-w-md mx-auto w-full"
+            >
+              <div className="bg-slate-900 border border-slate-800 p-4 rounded-3xl flex items-center justify-between gap-3 shadow-lg">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-yellow-400 text-slate-950 rounded-2xl shadow-sm">
+                    <Package className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="font-black text-sm text-white">Tabela de Preços</h3>
+                    <p className="text-[10px] text-slate-400">Toque em qualquer produto ou valor para editar</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="space-y-2.5">
+                {productsList.filter(p => p.isActive !== false).map(p => {
+                  const pixEff = calculateEffectivePrice(p, 'Pix');
+                  const cashEff = calculateEffectivePrice(p, 'Dinheiro');
+
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => {
+                        setSelectedProductForPriceEdit(p);
+                        setIsQuickPriceModalOpen(true);
+                      }}
+                      className="bg-slate-900 hover:bg-slate-850 p-4 rounded-3xl border border-slate-800 hover:border-yellow-400/50 transition-all cursor-pointer flex items-center justify-between gap-3 group active:scale-[0.99] shadow-sm"
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <img
+                          src={p.image}
+                          alt={p.name}
+                          className="w-14 h-14 rounded-2xl object-cover shrink-0 border border-slate-800"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] uppercase font-black text-slate-400 bg-slate-950 px-2 py-0.5 rounded-full border border-slate-800">
+                              {p.category || 'Gás & Água'}
+                            </span>
+                            {p.unit && (
+                              <span className="text-[9px] uppercase font-bold text-yellow-400">
+                                {p.unit}
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-bold text-xs text-white truncate mt-1">
+                            {p.name}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                            {p.pixDiscount?.enabled && (
+                              <span className="text-[10px] font-black text-emerald-400 flex items-center gap-0.5 bg-emerald-950/60 px-2 py-0.5 rounded-md border border-emerald-800/40">
+                                <Zap className="w-3 h-3" /> PIX R$ {pixEff.toFixed(2)}
+                              </span>
+                            )}
+                            {p.cashDiscount?.enabled && (
+                              <span className="text-[10px] font-black text-amber-400 flex items-center gap-0.5 bg-amber-950/60 px-2 py-0.5 rounded-md border border-amber-800/40">
+                                <Banknote className="w-3 h-3" /> R$ {cashEff.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="text-right shrink-0">
+                        <span className="text-[9px] font-black text-slate-500 uppercase block mb-1">Valor Venda</span>
+                        <div className="flex items-center gap-1.5 bg-yellow-400 text-slate-950 px-3 py-1.5 rounded-xl font-black text-sm shadow-md shadow-yellow-400/10 group-hover:scale-105 transition-transform">
+                          <span>R$ {p.price.toFixed(2)}</span>
+                          <Edit2 className="w-3.5 h-3.5 text-slate-800" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+
+          {/* ========================================================= */}
+          {/* ABA 4: FINANCEIRO & PRESTAÇÃO DE CONTAS (CLEAN & MODERNO) */}
           {/* ========================================================= */}
           {activeTab === 'finance' && (
             <motion.div
@@ -1630,18 +1753,32 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     Itens da Venda
                   </label>
                   <div className="space-y-2">
-                    {PRODUCTS.map(p => {
+                    {productsList.filter(p => p.isActive !== false).map(p => {
                       const qty = cart[p.id] || 0;
+                      const effectiveItemPrice = calculateEffectivePrice(p, selectedPaymentMethod);
                       return (
                         <div key={p.id} className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-between">
-                          <div className="flex items-center gap-3">
+                          <div 
+                            onClick={() => {
+                              setSelectedProductForPriceEdit(p);
+                              setIsQuickPriceModalOpen(true);
+                            }}
+                            className="flex items-center gap-3 cursor-pointer group/item flex-1 min-w-0 pr-2"
+                            title="Toque no produto para alterar o valor de venda"
+                          >
                             <img src={p.image} className="w-10 h-10 rounded-xl object-cover shrink-0" alt={p.name} />
-                            <div>
-                              <p className="font-bold text-xs text-white">{p.name}</p>
-                              <p className="font-black text-xs text-yellow-400">R$ {p.price.toFixed(2)}</p>
+                            <div className="min-w-0">
+                              <p className="font-bold text-xs text-white truncate group-hover/item:text-yellow-400 transition-colors">{p.name}</p>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <span className="font-black text-xs text-yellow-400">R$ {effectiveItemPrice.toFixed(2)}</span>
+                                <Edit2 className="w-3 h-3 text-slate-500 group-hover/item:text-yellow-400" />
+                                {p.price !== effectiveItemPrice && (
+                                  <span className="text-[10px] text-slate-500 line-through">R$ {p.price.toFixed(2)}</span>
+                                )}
+                              </div>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 shrink-0">
                             <button 
                               type="button"
                               onClick={() => setCart(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] || 0) - 1) }))}
@@ -1940,6 +2077,23 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           </div>
         )}
       </AnimatePresence>
+
+      {/* Modal de Edição Rápida de Preço para o Entregador */}
+      <QuickPriceEditModal
+        product={selectedProductForPriceEdit}
+        isOpen={isQuickPriceModalOpen}
+        onClose={() => {
+          setIsQuickPriceModalOpen(false);
+          setSelectedProductForPriceEdit(null);
+        }}
+        onSavePrice={async (prodId, newPrice, pixVal, cashVal, pixType, cashType) => {
+          if (onUpdateProductPrice) {
+            await onUpdateProductPrice(prodId, newPrice, pixVal, cashVal, pixType, cashType);
+          }
+          showToast('Preço do produto atualizado com sucesso!');
+        }}
+        userRole="entregador"
+      />
     </div>
   );
 };

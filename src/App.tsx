@@ -41,6 +41,7 @@ import { expenseService } from './services/expenseService';
 import { coverageService } from './services/coverageService';
 import { referralService } from './services/referralService';
 import { businessService, DEFAULT_BUSINESS_INFO } from './services/businessService';
+import { productService } from './services/productService';
 import { codeService } from './services/codeService';
 import { supabase } from './lib/supabase';
 import { 
@@ -368,6 +369,13 @@ export default function App() {
     } catch {}
     return DEFAULT_BUSINESS_INFO;
   });
+  const [products, setProducts] = useState<Product[]>(() => {
+    try {
+      const saved = localStorage.getItem('gas_app_products');
+      if (saved) return JSON.parse(saved);
+    } catch {}
+    return PRODUCTS;
+  });
   const [referrals, setReferrals] = useState<Referral[]>(MOCK_REFERRALS);
   const [initialTab, setInitialTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>('home');
   const [loading, setLoading] = useState(true); // true = aguardando restauração de sessão
@@ -388,6 +396,8 @@ export default function App() {
           setRewards(event.data.rewards);
         } else if (event.data?.type === 'SYNC_BUSINESS_INFO' && event.data.businessInfo) {
           setBusinessInfo(event.data.businessInfo);
+        } else if (event.data?.type === 'SYNC_PRODUCTS' && Array.isArray(event.data.products)) {
+          setProducts(event.data.products);
         }
       };
     } catch {}
@@ -408,18 +418,28 @@ export default function App() {
       if (e.key === 'gas_app_business_settings' && e.newValue) {
         try { setBusinessInfo(JSON.parse(e.newValue)); } catch {}
       }
+      if (e.key === 'gas_app_products' && e.newValue) {
+        try { setProducts(JSON.parse(e.newValue)); } catch {}
+      }
     };
     const handleCustomBusinessUpdate = (e: any) => {
       if (e.detail) {
         setBusinessInfo(e.detail);
       }
     };
+    const handleCustomProductsUpdate = (e: any) => {
+      if (e.detail && Array.isArray(e.detail)) {
+        setProducts(e.detail);
+      }
+    };
     window.addEventListener('gas_app_business_info_updated', handleCustomBusinessUpdate);
+    window.addEventListener('gas_app_products_updated', handleCustomProductsUpdate);
 
     return () => {
       if (channel) channel.close();
       window.removeEventListener('storage', handleStorage);
       window.removeEventListener('gas_app_business_info_updated', handleCustomBusinessUpdate);
+      window.removeEventListener('gas_app_products_updated', handleCustomProductsUpdate);
     };
   }, []);
 
@@ -565,13 +585,14 @@ export default function App() {
 
   const loadData = async () => {
     try {
-      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals, fetchedBusiness] = await Promise.all([
+      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals, fetchedBusiness, fetchedProducts] = await Promise.all([
         orderService.getOrders().catch(() => []),
         expenseService.getExpenses().catch(() => []),
         userService.getProfiles().catch(() => []),
         coverageService.getCoverageAreas().catch(() => []),
         referralService.getReferrals().catch(() => []),
-        businessService.getBusinessInfo().catch(() => DEFAULT_BUSINESS_INFO)
+        businessService.getBusinessInfo().catch(() => DEFAULT_BUSINESS_INFO),
+        productService.getProducts().catch(() => PRODUCTS)
       ]);
       setOrders(fetchedOrders || []);
       localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders || []));
@@ -594,6 +615,10 @@ export default function App() {
           if (JSON.stringify(prev) === JSON.stringify(fetchedBusiness)) return prev;
           return fetchedBusiness;
         });
+      }
+      if (fetchedProducts && fetchedProducts.length > 0) {
+        setProducts(fetchedProducts);
+        localStorage.setItem('gas_app_products', JSON.stringify(fetchedProducts));
       }
     } catch (err) {
       console.warn('Usando dados sincronizados locais:', err);
@@ -664,7 +689,8 @@ export default function App() {
         'gas_app_business_settings',
         'gas_app_rewards',
         'gas_app_benefits_config',
-        'gas_app_coverage_areas'
+        'gas_app_coverage_areas',
+        'gas_app_products'
       ];
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -961,6 +987,56 @@ export default function App() {
     } catch {}
   };
 
+  const handleAddProduct = async (product: Product) => {
+    try {
+      const updated = await productService.upsertProduct(product);
+      setProducts(updated);
+    } catch (err) {
+      console.error('Error adding product:', err);
+    }
+  };
+
+  const handleUpdateProduct = async (product: Product) => {
+    try {
+      const updated = await productService.upsertProduct(product);
+      setProducts(updated);
+    } catch (err) {
+      console.error('Error updating product:', err);
+    }
+  };
+
+  const handleDeleteProduct = async (productId: string) => {
+    try {
+      const updated = await productService.deleteProduct(productId);
+      setProducts(updated);
+    } catch (err) {
+      console.error('Error deleting product:', err);
+    }
+  };
+
+  const handleUpdateProductPrice = async (
+    productId: string,
+    newPrice: number,
+    pixDiscountValue?: number,
+    cashDiscountValue?: number,
+    pixType?: 'fixed' | 'percentage',
+    cashType?: 'fixed' | 'percentage'
+  ) => {
+    try {
+      const updated = await productService.updateProductPrice(
+        productId,
+        newPrice,
+        pixDiscountValue,
+        cashDiscountValue,
+        pixType,
+        cashType
+      );
+      setProducts(updated);
+    } catch (err) {
+      console.error('Error updating product price:', err);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center text-white gap-4">
@@ -1011,6 +1087,7 @@ export default function App() {
                 benefitsConfig={benefitsConfig}
                 onLogout={handleLogout}
                 businessInfo={businessInfo}
+                products={products}
               />
             </motion.div>
           )}
@@ -1044,6 +1121,11 @@ export default function App() {
                 onRefreshData={loadData}
                 businessInfo={businessInfo}
                 onUpdateBusinessInfo={handleUpdateBusinessInfo}
+                products={products}
+                onAddProduct={handleAddProduct}
+                onUpdateProduct={handleUpdateProduct}
+                onDeleteProduct={handleDeleteProduct}
+                onUpdateProductPrice={handleUpdateProductPrice}
               />
             </motion.div>
           )}
@@ -1061,6 +1143,8 @@ export default function App() {
                 allCustomers={allUsers.filter(u => u.role === 'cliente')}
                 allCollaborators={allUsers.filter(u => u.role === 'gestor' || u.role === 'admin')}
                 businessInfo={businessInfo}
+                products={products}
+                onUpdateProductPrice={handleUpdateProductPrice}
               />
             </motion.div>
           )}

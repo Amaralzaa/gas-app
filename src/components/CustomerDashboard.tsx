@@ -39,7 +39,7 @@ import { MapContainer, TileLayer, GeoJSON, Marker, Popup, Polyline, useMap } fro
 import L from 'leaflet';
 import { createCirclePolygon, haversineKm, estimateMinutes, fetchOsrmRoute } from '../utils/geoUtils';
 import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod, RedeemedReward, OpeningHours, DayHours } from '../types';
-import { PRODUCTS } from '../constants';
+import { PRODUCTS, calculateEffectivePrice } from '../constants';
 import { businessService, DEFAULT_DELIVERY_PERIODS, DEFAULT_BUSINESS_INFO } from '../services/businessService';
 import { userService } from '../services/userService';
 import { codeService } from '../services/codeService';
@@ -67,6 +67,7 @@ interface CustomerDashboardProps {
   benefitsConfig?: BenefitsConfig;
   onLogout?: () => void;
   businessInfo?: BusinessInfo;
+  products?: Product[];
 }
 
 export interface ScheduledDateOption {
@@ -692,8 +693,9 @@ const ActiveOrderTrackingSection: React.FC<{
 };
 
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ 
-  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout, businessInfo
+  user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout, businessInfo, products = []
 }) => {
+  const productsList = (products && products.length > 0) ? products : PRODUCTS;
   const [activeTab, setActiveTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>(initialTab || 'home');
   const [step, setStep] = useState<'landing' | 'onboarding' | 'address' | 'catalog' | 'checkout' | 'confirmation' | 'processing' | 'status'>('landing');
   const [selectedAddress, setSelectedAddress] = useState<Address | null>(user.addresses?.[0] || null);
@@ -1121,7 +1123,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     if (reward.type === 'discount') {
       discountVal = reward.value || 15;
     } else if (reward.productId) {
-      const prod = PRODUCTS.find(p => p.id === reward.productId);
+      const prod = productsList.find(p => p.id === reward.productId);
       discountVal = prod?.price || reward.value || 0;
     } else {
       discountVal = reward.value || 0;
@@ -1380,14 +1382,26 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   };
 
   const cartSubtotal = Object.entries(cart).reduce((acc, [id, qty]) => {
-    const product = PRODUCTS.find(p => p.id === id);
+    const product = productsList.find(p => p.id === id);
     return acc + (product?.price || 0) * (qty as number);
   }, 0);
 
-  const discountValue = appliedCoupon ? (
+  // Desconto por forma de pagamento (PIX ou Dinheiro)
+  const paymentMethodDiscount = useMemo(() => {
+    return Object.entries(cart).reduce((acc, [id, qty]) => {
+      const product = productsList.find(p => p.id === id);
+      if (!product) return acc;
+      const base = product.price || 0;
+      const effective = calculateEffectivePrice(product, pendingPaymentMethod);
+      return acc + (base - effective) * (qty as number);
+    }, 0);
+  }, [cart, productsList, pendingPaymentMethod]);
+
+  const couponDiscountValue = appliedCoupon ? (
     appliedCoupon.type === 'fixed' ? appliedCoupon.value : (cartSubtotal * (appliedCoupon.value / 100))
   ) : 0;
 
+  const discountValue = couponDiscountValue + paymentMethodDiscount;
   const cartTotal = Math.max(0, cartSubtotal - discountValue);
   const cartCount = Object.values(cart).reduce<number>((acc, qty) => acc + (Number(qty) || 0), 0);
 
@@ -1653,7 +1667,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         items: Object.entries(cart).map(([id, qty]) => ({
           productId: id,
           quantity: qty as number,
-          priceAtTime: PRODUCTS.find(p => p.id === id)?.price || 0
+          priceAtTime: productsList.find(p => p.id === id)?.price || 0
         })),
         total: cartTotal,
         discount: discountValue,
@@ -2101,20 +2115,44 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 </div>
 
                 <div className="space-y-4">
-                  {PRODUCTS.map(p => (
-                    <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 border border-slate-100">
-                      <img src={p.image} className="w-16 h-16 rounded-xl object-cover" referrerPolicy="no-referrer" />
-                      <div className="flex-1">
-                        <h3 className="font-bold text-sm">{p.name}</h3>
-                        <p className="text-lg font-black">R$ {p.price.toFixed(2)}</p>
+                  {productsList.filter(p => p.isActive !== false).map(p => {
+                    const pixEff = calculateEffectivePrice(p, 'Pix');
+                    const cashEff = calculateEffectivePrice(p, 'Dinheiro');
+                    return (
+                      <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 border border-slate-100 hover:border-yellow-400/40 transition-all">
+                        <img 
+                          src={p.image} 
+                          className="w-16 h-16 rounded-xl object-cover shrink-0" 
+                          referrerPolicy="no-referrer"
+                          onError={(e: any) => { e.target.src = 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=600&auto=format&fit=crop&q=80'; }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-bold text-sm truncate">{p.name}</h3>
+                          <div className="flex items-baseline gap-2 mt-0.5">
+                            <p className="text-lg font-black text-slate-900">R$ {p.price.toFixed(2)}</p>
+                            {p.unit && <span className="text-[10px] text-slate-400 font-bold">{p.unit}</span>}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                            {p.pixDiscount?.enabled && p.pixDiscount.value > 0 && (
+                              <span className="text-[10px] font-black text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-1.5 py-0.5 rounded-md">
+                                ⚡ PIX R$ {pixEff.toFixed(2)}
+                              </span>
+                            )}
+                            {p.cashDiscount?.enabled && p.cashDiscount.value > 0 && (
+                              <span className="text-[10px] font-black text-amber-700 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded-md">
+                                💵 Dinheiro R$ {cashEff.toFixed(2)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 bg-slate-100 rounded-full p-1 shrink-0">
+                          <button onClick={() => updateCart(p.id, -1)} className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm cursor-pointer hover:bg-slate-50"><Minus className="w-4 h-4" /></button>
+                          <span className="font-bold w-4 text-center">{cart[p.id] || 0}</span>
+                          <button onClick={() => updateCart(p.id, 1)} className="w-8 h-8 rounded-full bg-yellow-400 flex items-center justify-center shadow-sm cursor-pointer hover:bg-yellow-300"><Plus className="w-4 h-4" /></button>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-3 bg-slate-100 rounded-full p-1">
-                        <button onClick={() => updateCart(p.id, -1)} className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm"><Minus className="w-4 h-4" /></button>
-                        <span className="font-bold w-4 text-center">{cart[p.id] || 0}</span>
-                        <button onClick={() => updateCart(p.id, 1)} className="w-8 h-8 rounded-full bg-yellow-400 flex items-center justify-center shadow-sm"><Plus className="w-4 h-4" /></button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 {cartTotal > 0 && (
                   <div className="fixed bottom-20 left-0 right-0 px-4 z-40 pointer-events-none">
@@ -2379,7 +2417,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </div>
                   <div className="divide-y divide-slate-50">
                     {Object.entries(cart).map(([id, qty]) => {
-                      const product = PRODUCTS.find(p => p.id === id);
+                      const product = productsList.find(p => p.id === id);
                       if (!product || (qty as number) <= 0) return null;
                       return (
                         <div key={id} className="py-2.5 flex items-center justify-between gap-3">
@@ -2508,10 +2546,18 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     <span className="text-slate-500">Subtotal dos itens</span>
                     <span className="font-bold text-slate-900">R$ {cartSubtotal.toFixed(2)}</span>
                   </div>
-                  {discountValue > 0 && (
-                    <div className="flex justify-between text-xs text-emerald-600">
-                      <span>Desconto ({appliedCoupon?.code})</span>
-                      <span className="font-bold">- R$ {discountValue.toFixed(2)}</span>
+                  {paymentMethodDiscount > 0 && (
+                    <div className="flex justify-between text-xs text-emerald-700 font-black bg-emerald-50 p-2 rounded-xl border border-emerald-100">
+                      <span className="flex items-center gap-1">
+                        ⚡ Desconto {pendingPaymentMethod.startsWith('PIX') ? 'PIX' : 'Dinheiro'}
+                      </span>
+                      <span>- R$ {paymentMethodDiscount.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {couponDiscountValue > 0 && (
+                    <div className="flex justify-between text-xs text-emerald-600 font-bold">
+                      <span>Cupom ({appliedCoupon?.code})</span>
+                      <span>- R$ {couponDiscountValue.toFixed(2)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-xs text-slate-500">
@@ -2798,9 +2844,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                             <div className={`p-2.5 rounded-2xl transition-colors ${
                               isRedeemed ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-50 group-hover:bg-yellow-50'
                             }`}>
-                              {reward.productId && PRODUCTS.find(p => p.id === reward.productId)?.image ? (
+                              {reward.productId && productsList.find(p => p.id === reward.productId)?.image ? (
                                 <img 
-                                  src={PRODUCTS.find(p => p.id === reward.productId)?.image} 
+                                  src={productsList.find(p => p.id === reward.productId)?.image} 
                                   alt={reward.title} 
                                   className="w-8 h-8 rounded-xl object-cover" 
                                 />
@@ -3246,7 +3292,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           </div>
                           <div className="text-slate-500 text-[11px] pl-5">
                             {activeOrder.items.map(item => {
-                              const product = PRODUCTS.find(p => p.id === item.productId);
+                              const product = productsList.find(p => p.id === item.productId);
                               return `${item.quantity}x ${product?.name || item.productId}`;
                             }).join(' · ')}
                           </div>
@@ -4490,7 +4536,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   {rewardConfirmation.reward.productId && (
                     <div className="bg-amber-50 border border-amber-200 p-3 rounded-2xl mb-4 text-xs text-amber-900 flex items-center gap-2.5 text-left">
                       <Package className="w-5 h-5 text-amber-600 shrink-0" />
-                      <span>1 unidade de <strong>{PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.name || 'Produto'}</strong> pronta para inclusão grátis!</span>
+                      <span>1 unidade de <strong>{productsList.find(p => p.id === rewardConfirmation.reward.productId)?.name || 'Produto'}</strong> pronta para inclusão grátis!</span>
                     </div>
                   )}
 
@@ -4500,7 +4546,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         if (rewardConfirmation.code) {
                           const discountVal = rewardConfirmation.reward.type === 'discount' 
                             ? (rewardConfirmation.reward.value || 15) 
-                            : (rewardConfirmation.reward.productId ? (PRODUCTS.find(p => p.id === rewardConfirmation.reward.productId)?.price || rewardConfirmation.reward.value || 0) : (rewardConfirmation.reward.value || 0));
+                            : (rewardConfirmation.reward.productId ? (productsList.find(p => p.id === rewardConfirmation.reward.productId)?.price || rewardConfirmation.reward.value || 0) : (rewardConfirmation.reward.value || 0));
 
                           const rewardExpiry = new Date(Date.now() + (rewardConfirmation.reward.validityDays || 30) * 24 * 60 * 60 * 1000).toISOString();
                           const couponObj: Coupon = {
