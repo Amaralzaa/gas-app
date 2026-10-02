@@ -12,6 +12,7 @@ import {
   User,
   MapPin,
   ChevronRight,
+  ChevronLeft,
   Edit2,
   X,
   Map as MapIcon,
@@ -41,16 +42,17 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { AppUser, Order, OrderStatus, Expense, Address, CoverageArea, Coupon, Reward, Referral, BenefitsConfig, UserRole, BusinessInfo } from '../types';
+import { AppUser, Order, OrderStatus, Expense, Address, CoverageArea, Coupon, Reward, Referral, BenefitsConfig, UserRole, BusinessInfo, DeliveryPeriod } from '../types';
 import { createCirclePolygon } from '../utils/geoUtils';
 import { showSafeNotification } from '../utils/notifications';
 import { authService } from '../services/authService';
 import { supabase } from '../lib/supabase';
 import { playNewOrderSound, unlockAudio } from '../utils/sounds';
 import { BusinessSettingsTab } from './BusinessSettingsTab';
-import { DEFAULT_BUSINESS_INFO } from '../services/businessService';
+import { DEFAULT_BUSINESS_INFO, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
 import { DashboardMetricsTab } from './manager/DashboardMetricsTab';
 import { PredictionsCRMTab } from './manager/PredictionsCRMTab';
+import { PRODUCTS } from '../constants';
 
 // Fix Leaflet default icon issue
 let DefaultIcon = L.icon({
@@ -69,21 +71,82 @@ export const getTodayISO = () => {
   return `${year}-${month}-${day}`;
 };
 
-export const isOrderFutureScheduled = (o: Order) => {
-  if (!o.isScheduled || o.isForceActivated) return false;
-  if (o.status === 'Concluído' || o.status === 'Cancelado') return false;
-  
-  const todayISO = getTodayISO();
-  if (o.scheduledDateISO) {
-    return o.scheduledDateISO > todayISO;
-  }
-  const createdDateISO = new Date(o.createdAt).toISOString().split('T')[0];
-  if (createdDateISO < todayISO) {
-    return false;
-  }
-  return false;
+export const addDaysISO = (dateISO: string, days: number): string => {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
-import { PRODUCTS } from '../constants';
+
+export const formatAgendaDateFormatted = (dateISO: string): string => {
+  const [y, m, d] = dateISO.split('-').map(Number);
+  const date = new Date(y, m - 1, d, 12, 0, 0);
+  const dateStr = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const weekday = date.toLocaleDateString('pt-BR', { weekday: 'long' });
+  const weekdayCap = weekday.charAt(0).toUpperCase() + weekday.slice(1);
+  return `${dateStr} (${weekdayCap})`;
+};
+
+export const getOrderScheduledDateISO = (o: Order): string => {
+  if (o.scheduledDateISO && /^\d{4}-\d{2}-\d{2}$/.test(o.scheduledDateISO)) {
+    return o.scheduledDateISO;
+  }
+
+  if (o.scheduledDate) {
+    const match = o.scheduledDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (match) {
+      const day = match[1].padStart(2, '0');
+      const month = match[2].padStart(2, '0');
+      const year = match[3];
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  if (o.feedback) {
+    const match = o.feedback.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (match) {
+      const day = match[1].padStart(2, '0');
+      const month = match[2].padStart(2, '0');
+      const year = match[3];
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // Agendamento é estritamente para dias futuros (mínimo amanhã)
+  return addDaysISO(getTodayISO(), 1);
+};
+
+export const isOrderOnAgendaDate = (o: Order, targetISO: string) => {
+  if (!o.isScheduled) return false;
+  if (o.status !== 'Pendente' || o.isForceActivated) return false;
+  return getOrderScheduledDateISO(o) === targetISO;
+};
+
+export const isOrderInPeriod = (o: Order, period: DeliveryPeriod) => {
+  const pId = (period.id || '').toLowerCase();
+  const pName = (period.name || '').toLowerCase();
+
+  const schedId = (o.scheduledPeriod || '').toLowerCase();
+  const schedName = (o.scheduledPeriodName || '').toLowerCase();
+
+  return (
+    (pId && schedId === pId) ||
+    (pName && schedName === pName) ||
+    (pName && schedId.includes(pName)) ||
+    (pId && schedName.includes(pId)) ||
+    (pName && schedName.includes(pName))
+  );
+};
+
+export const isOrderFutureScheduled = (o: Order) => {
+  // Não há agendamento para o mesmo dia: pedidos agendados são estritamente para dias futuros
+  if (!o.isScheduled || o.isForceActivated) return false;
+  if (o.status !== 'Pendente') return false;
+  return true;
+};
 
 interface ManagerDashboardProps {
   user: AppUser;
@@ -202,6 +265,17 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [customReason, setCustomReason] = useState<string>('');
   const [currentTime, setCurrentTime] = useState(Date.now());
+  const [isAgendaModalOpen, setIsAgendaModalOpen] = useState(false);
+  const [selectedAgendaDateISO, setSelectedAgendaDateISO] = useState<string>(() => addDaysISO(getTodayISO(), 1));
+
+  const handleForceActivate = (orderToActivate: Order) => {
+    const updated: Order = {
+      ...orderToActivate,
+      isForceActivated: true
+    };
+    onUpdateOrder(updated);
+    alert(`Pedido #${orderToActivate.id} ativado para a fila de Pedidos Pendentes de hoje!`);
+  };
 
   const CANCELLATION_REASONS = [
     'Cliente desistiu da compra',
@@ -491,6 +565,10 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   // Search filter for orders (tracking & orders tabs)
   const [orderSearchQuery, setOrderSearchQuery] = useState('');
 
+  const totalScheduledCount = useMemo(() => {
+    return orders.filter(o => o.isScheduled && !o.isForceActivated && o.status !== 'Concluído' && o.status !== 'Cancelado').length;
+  }, [orders]);
+
   const matchesOrderSearch = (order: Order, term: string) => {
     if (!term || !term.trim()) return true;
     const cleanTerm = term.toLowerCase().trim();
@@ -519,7 +597,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       const matchesStatus = statusFilter === 'Todos'
         ? true
         : statusFilter === 'Avaliados'
-        ? Boolean(o.serviceRating || o.deliveryRating || o.rating)
+        ? Boolean((o.serviceRating || o.deliveryRating || o.rating) && o.status !== 'Cancelado')
         : o.status === statusFilter;
       const matchesSearch = matchesOrderSearch(o, orderSearchQuery);
       return matchesStatus && matchesSearch;
@@ -971,7 +1049,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             return (
               <motion.div key="tracking" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
                 
-                {/* Campo de Busca em Acompanhamento */}
+                {/* Campo de Busca e Ações em Acompanhamento */}
                 <div className="bg-white p-3 sm:p-4 rounded-3xl shadow-sm border border-slate-100 flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
                   <div className="relative flex-1">
                     <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-slate-400" />
@@ -992,6 +1070,25 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       </button>
                     )}
                   </div>
+                  
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedAgendaDateISO(addDaysISO(getTodayISO(), 1));
+                      setIsAgendaModalOpen(true);
+                    }}
+                    className="flex items-center justify-center gap-2 px-4 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-black rounded-2xl text-xs transition-all shadow-md active:scale-95 shrink-0 cursor-pointer"
+                    title="Abrir Agenda de Pedidos"
+                  >
+                    <Calendar className="w-4 h-4 text-purple-200" />
+                    <span>Agenda de Pedidos</span>
+                    {totalScheduledCount > 0 && (
+                      <span className="bg-purple-800 text-purple-100 px-2 py-0.5 rounded-full text-[10px] font-black">
+                        {totalScheduledCount}
+                      </span>
+                    )}
+                  </button>
+
                   {onRefreshData && (
                     <button
                       type="button"
@@ -1381,132 +1478,6 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     </div>
                   )}
                 </div>
-
-                {/* 4. SEÇÃO: AGENDA DE ENTREGAS AGENDADAS (PRÓXIMOS DIAS) */}
-                <div className="space-y-3 pt-6 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full bg-purple-600 animate-pulse"></div>
-                      <h3 className="font-black text-lg text-purple-950 flex items-center gap-2">
-                        <Calendar className="w-5 h-5 text-purple-600" />
-                        Agenda de Agendamentos Futuros <span className="text-purple-700 font-bold text-sm">({futureScheduledOrders.length})</span>
-                      </h3>
-                    </div>
-                    <span className="text-xs text-slate-500 font-bold hidden sm:inline">
-                      Entregas agendadas para os próximos dias (não poluem os pendentes de hoje)
-                    </span>
-                  </div>
-
-                  {futureScheduledOrders.length === 0 ? (
-                    <div className="bg-purple-50/50 rounded-3xl p-6 text-center border border-dashed border-purple-200 text-purple-800">
-                      <Calendar className="w-8 h-8 mx-auto mb-2 text-purple-400" />
-                      <p className="font-bold text-xs">Nenhum pedido agendado para datas futuras no momento.</p>
-                      <p className="text-[11px] text-purple-600 mt-0.5">Os agendamentos feitos pelos clientes aparecerão aqui organizados por data.</p>
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {futureScheduledOrders.map(o => {
-                        const ordersCount = getCustomerOrdersCount(o.customerId, o.phone);
-                        const itemsSummary = o.items.map(it => {
-                          const p = PRODUCTS.find(pr => pr.id === it.productId);
-                          return `${it.quantity}x ${p?.name || 'Item'}`;
-                        }).join(' + ');
-
-                        return (
-                          <div 
-                            key={o.id}
-                            onClick={() => setSelectedOrderDetails(o)}
-                            className="bg-white rounded-3xl p-5 border-2 border-purple-300 shadow-sm hover:shadow-xl transition-all cursor-pointer relative overflow-hidden group flex flex-col justify-between"
-                          >
-                            <div className="absolute top-0 left-0 right-0 h-1.5 bg-purple-500"></div>
-
-                            <div>
-                              <div className="flex justify-between items-start mb-3">
-                                <div>
-                                  <span className="text-[10px] font-black bg-purple-100 text-purple-800 px-2 py-0.5 rounded-md uppercase">#{o.id}</span>
-                                  <div className="flex items-center gap-1.5 mt-1.5">
-                                    <h4 className="font-black text-base text-slate-900 group-hover:text-purple-700 transition-colors">{o.customerName}</h4>
-                                    <span className="text-[9px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">
-                                      {ordersCount <= 1 ? '1º pedido' : `${ordersCount}º pedido`}
-                                    </span>
-                                  </div>
-                                  {o.phone && (
-                                    <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1 mt-0.5">
-                                      <Phone className="w-3 h-3 text-slate-400 shrink-0" />
-                                      <span>{o.phone}</span>
-                                    </p>
-                                  )}
-                                </div>
-                                
-                                <div className="text-right">
-                                  <span className="text-[10px] font-black text-purple-700 bg-purple-100 px-2.5 py-1 rounded-xl block border border-purple-200">
-                                    🗓️ Agendado
-                                  </span>
-                                  <span className="text-[10px] font-bold text-slate-400 uppercase mt-1 block">Futuro</span>
-                                </div>
-                              </div>
-
-                              <div className="bg-purple-50/90 border border-purple-300 text-purple-950 rounded-2xl p-3 mb-3 shadow-xs space-y-1">
-                                <p className="text-xs font-black flex items-center gap-1.5">
-                                  <Calendar className="w-3.5 h-3.5 text-purple-700 shrink-0" />
-                                  <span>{o.scheduledDate || 'Data Futura'}</span>
-                                </p>
-                                <p className="text-[11px] text-purple-800 font-bold flex items-center gap-1">
-                                  <Clock className="w-3 h-3 text-purple-600 shrink-0" />
-                                  <span>Turno {o.scheduledPeriodName || o.scheduledPeriod} ({o.scheduledTimeRange || 'Horário agendado'})</span>
-                                </p>
-                              </div>
-
-                              <div className="bg-slate-50 rounded-2xl p-3 my-2 space-y-1.5 border border-slate-100 text-xs">
-                                <div className="flex items-center justify-between font-bold text-slate-800">
-                                  <span className="truncate max-w-[170px]" title={itemsSummary}>{itemsSummary}</span>
-                                  <span className="whitespace-nowrap font-black">R$ {o.total.toFixed(2)}</span>
-                                </div>
-                                <div className="flex items-center justify-between text-[11px] text-slate-500">
-                                  <span>Pagamento: <strong className="text-slate-800">{o.paymentMethod}</strong></span>
-                                  {o.couponCode && (
-                                    <span className="text-emerald-700 bg-emerald-100 px-1.5 rounded font-black text-[9px]">
-                                      {o.couponCode}
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="text-[11px] text-slate-500 truncate pt-1 border-t border-slate-200/60 flex items-center gap-1">
-                                  <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
-                                  <span className="truncate">{o.address.street}, {o.address.number} • {o.address.neighborhood}</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="pt-2 grid grid-cols-2 gap-2 border-t border-slate-100 mt-2">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const updated = { ...o, isForceActivated: true };
-                                  onUpdateOrder(updated);
-                                }}
-                                className="bg-purple-600 hover:bg-purple-700 text-white font-black text-[11px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
-                                title="Mover este pedido imediatamente para a fila de pendentes de hoje"
-                              >
-                                ⚡ Ativar Agora
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setAssigningOrder(o);
-                                }}
-                                className="bg-slate-900 hover:bg-yellow-500 hover:text-slate-950 text-white font-black text-[11px] py-2 px-2 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
-                              >
-                                <Truck className="w-3.5 h-3.5" /> Atribuir
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
                 </React.Fragment>
                 )}
 
@@ -1650,7 +1621,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         </div>
 
                         {/* Indicadores de Avaliação do Pedido (Estabelecimento e Entrega) */}
-                        {((o.serviceRating || o.deliveryRating || o.rating) || o.status === 'Concluído') && (
+                        {o.status !== 'Cancelado' && ((o.serviceRating || o.deliveryRating || o.rating) || o.status === 'Concluído') && (
                           <div className="pt-2.5 pb-1 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                             {(o.serviceRating || o.deliveryRating || o.rating) ? (
                               <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
@@ -3076,7 +3047,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           const assignedDriver = deliveryPersons.find(dp => dp.id === o.deliveryPersonId);
 
           return (
-            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[9990] flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[10010] flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
               <motion.div 
                 initial={{ scale: 0.95, opacity: 0, y: 15 }} 
                 animate={{ scale: 1, opacity: 1, y: 0 }} 
@@ -3165,7 +3136,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   )}
 
                   {/* Seção: Avaliação do Cliente (Estabelecimento & Entrega) */}
-                  {(o.status === 'Concluído' || (o.serviceRating || o.deliveryRating || o.rating)) && (() => {
+                  {o.status !== 'Cancelado' && (o.status === 'Concluído' || (o.serviceRating || o.deliveryRating || o.rating)) && (() => {
                     const cleanFeedback = o.feedback
                       ?.replace(/\[Agendado para:.*?\]/g, '')
                       ?.replace(/\[Cancelamento\]:.*?$/g, '')
@@ -3722,7 +3693,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       </AnimatePresence>
       <AnimatePresence>
         {assigningOrder && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[10020] flex items-center justify-center p-4">
             <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6">
               <div className="flex justify-between items-center mb-6">
                 <h3 className="font-black text-xl">Atribuir Pedido</h3>
@@ -3747,7 +3718,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       {/* Modal de Motivo de Cancelamento de Pedido */}
       <AnimatePresence>
         {cancellingOrder && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[10030] flex items-center justify-center p-4">
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }} 
               animate={{ scale: 1, opacity: 1 }} 
@@ -4093,6 +4064,288 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      {/* MODAL AGENDA DE PEDIDOS (VISUALIZAÇÃO POR DIA E TURNOS) */}
+      <AnimatePresence>
+        {isAgendaModalOpen && (() => {
+          const activePeriods = (businessInfo?.deliveryPeriods && businessInfo.deliveryPeriods.length > 0
+            ? businessInfo.deliveryPeriods
+            : DEFAULT_DELIVERY_PERIODS).filter(p => p.active !== false);
+
+          const agendaOrdersForDate = orders.filter(o => 
+            o.isScheduled && 
+            !o.isForceActivated && 
+            o.status === 'Pendente' &&
+            isOrderOnAgendaDate(o, selectedAgendaDateISO)
+          );
+
+          const tomorrowISO = addDaysISO(getTodayISO(), 1);
+          const isTomorrow = selectedAgendaDateISO === tomorrowISO;
+          const isAtMinimumDate = selectedAgendaDateISO <= tomorrowISO;
+
+          return (
+            <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-md z-[9995] flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0, y: 15 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.95, opacity: 0, y: 15 }}
+                className="bg-slate-50 w-full max-w-5xl rounded-[2.5rem] shadow-2xl overflow-hidden my-auto border border-slate-200 flex flex-col max-h-[92vh]"
+              >
+                {/* Topo da Agenda */}
+                <div className="bg-slate-900 text-white p-5 sm:p-6 relative shrink-0">
+                  <div className="flex items-center justify-between pr-10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-2xl bg-purple-600/30 border border-purple-500/50 flex items-center justify-center text-purple-300 shrink-0">
+                        <Calendar className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2">
+                          Agenda de Pedidos
+                        </h2>
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          Organização por turnos de entrega definidos em Meu Negócio (Apenas dias futuros)
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setIsAgendaModalOpen(false)}
+                    className="absolute top-5 right-5 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 p-2.5 rounded-2xl transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Navegação por Data (Calendário Diário) */}
+                <div className="bg-white border-b border-slate-200 p-4 sm:px-6 flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-xs">
+                  <div className="flex items-center gap-2 sm:gap-3">
+                    <button
+                      onClick={() => setSelectedAgendaDateISO(prev => addDaysISO(prev, -1))}
+                      disabled={isAtMinimumDate}
+                      className={`p-2.5 rounded-2xl font-bold transition-all active:scale-95 flex items-center gap-1 text-xs ${
+                        isAtMinimumDate 
+                          ? 'bg-slate-100 text-slate-300 cursor-not-allowed opacity-50' 
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-700 cursor-pointer'
+                      }`}
+                      title={isAtMinimumDate ? "Não há agendamentos para o mesmo dia ou datas passadas" : "Dia anterior"}
+                    >
+                      <ChevronLeft className="w-5 h-5" />
+                      <span className="hidden sm:inline">Anterior</span>
+                    </button>
+
+                    <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-4 py-2 rounded-2xl">
+                      <Calendar className="w-5 h-5 text-purple-600 shrink-0" />
+                      <span className="font-black text-slate-900 text-sm sm:text-base">
+                        {formatAgendaDateFormatted(selectedAgendaDateISO)}
+                      </span>
+                      {isTomorrow && (
+                        <span className="bg-purple-600 text-white text-[10px] font-black px-2.5 py-0.5 rounded-md uppercase">
+                          Amanhã
+                        </span>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => setSelectedAgendaDateISO(prev => addDaysISO(prev, 1))}
+                      className="p-2.5 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold transition-all active:scale-95 flex items-center gap-1 text-xs cursor-pointer"
+                      title="Próximo dia"
+                    >
+                      <span className="hidden sm:inline">Próximo</span>
+                      <ChevronRight className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    {!isTomorrow && (
+                      <button
+                        onClick={() => setSelectedAgendaDateISO(tomorrowISO)}
+                        className="bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 text-xs font-black px-3.5 py-2 rounded-xl transition-all cursor-pointer"
+                      >
+                        Ir para Amanhã
+                      </button>
+                    )}
+                    <span className="text-xs font-bold bg-slate-100 text-slate-600 px-3 py-2 rounded-xl">
+                      Total no dia: <strong className="text-slate-900">{agendaOrdersForDate.length}</strong>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Conteúdo Rolável - Turnos de Entrega */}
+                <div className="p-4 sm:p-6 space-y-6 overflow-y-auto flex-1 custom-scrollbar">
+                  {activePeriods.map(period => {
+                    const periodOrders = agendaOrdersForDate.filter(o => isOrderInPeriod(o, period));
+
+                    return (
+                      <div key={period.id} className="bg-white rounded-3xl p-5 border border-slate-200 shadow-sm space-y-4">
+                        {/* Cabeçalho do Turno */}
+                        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-9 h-9 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-black text-sm">
+                              {period.icon === 'sun' ? '☀️' : period.icon === 'sunset' ? '🌅' : period.icon === 'moon' ? '🌙' : '⏰'}
+                            </div>
+                            <div>
+                              <h3 className="font-black text-base text-slate-900 flex items-center gap-2">
+                                Turno {period.name}
+                                <span className="text-xs font-bold text-slate-400">
+                                  ({period.startTime} às {period.endTime})
+                                </span>
+                              </h3>
+                            </div>
+                          </div>
+                          <span className={`text-xs font-black px-3 py-1 rounded-xl ${
+                            periodOrders.length > 0 ? 'bg-purple-100 text-purple-800' : 'bg-slate-100 text-slate-400'
+                          }`}>
+                            {periodOrders.length} {periodOrders.length === 1 ? 'pedido' : 'pedidos'}
+                          </span>
+                        </div>
+
+                        {/* Lista de Pedidos do Turno */}
+                        {periodOrders.length === 0 ? (
+                          <div className="py-6 text-center border-2 border-dashed border-slate-100 rounded-2xl text-slate-400">
+                            <p className="text-xs font-semibold">Nenhum pedido agendado para o turno da {period.name.toLowerCase()} nesta data.</p>
+                          </div>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {periodOrders.map(o => {
+                              const itemsSummary = o.items.map(it => {
+                                const p = PRODUCTS.find(pr => pr.id === it.productId);
+                                return `${it.quantity}x ${p?.name || 'Item'}`;
+                              }).join(' + ');
+
+                              return (
+                                <div
+                                  key={o.id}
+                                  onClick={() => setSelectedOrderDetails(o)}
+                                  className="bg-slate-50 rounded-2xl p-4 border border-purple-200 hover:border-purple-400 shadow-xs hover:shadow-md transition-all cursor-pointer flex flex-col justify-between space-y-3 group"
+                                >
+                                  <div>
+                                    <div className="flex items-start justify-between gap-2 mb-2">
+                                      <div>
+                                        <span className="text-[10px] font-black bg-purple-100 text-purple-800 px-2 py-0.5 rounded-md uppercase">
+                                          #{o.id}
+                                        </span>
+                                        <h4 className="font-black text-sm text-slate-900 group-hover:text-purple-700 transition-colors mt-1">
+                                          {o.customerName}
+                                        </h4>
+                                      </div>
+                                      <span className="text-xs font-black text-slate-900 bg-white px-2 py-1 rounded-lg border border-slate-200">
+                                        R$ {o.total.toFixed(2)}
+                                      </span>
+                                    </div>
+
+                                    {o.phone && (
+                                      <p className="text-[11px] text-slate-500 font-medium flex items-center gap-1 mb-2">
+                                        <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                        <span>{o.phone}</span>
+                                      </p>
+                                    )}
+
+                                    <div className="bg-white rounded-xl p-2.5 border border-slate-200/80 space-y-1 text-xs">
+                                      <p className="font-bold text-slate-800 truncate" title={itemsSummary}>
+                                        {itemsSummary}
+                                      </p>
+                                      <p className="text-[11px] text-slate-500 truncate flex items-center gap-1">
+                                        <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                        <span>{o.address.street}, {o.address.number} • {o.address.neighborhood}</span>
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  {/* Ações Rápidas do Gestor */}
+                                  <div className="pt-2 flex flex-col gap-1.5 border-t border-slate-200/60">
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleForceActivate(o);
+                                        }}
+                                        className="w-full bg-amber-500 hover:bg-amber-600 text-slate-950 font-black text-[11px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                                        title="Mover imediatamente para Pedidos Pendentes"
+                                      >
+                                        ⚡ Ativar Agora
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setAssigningOrder(o);
+                                        }}
+                                        className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black text-[11px] py-2 px-2.5 rounded-xl transition-all flex items-center justify-center gap-1 shadow-xs cursor-pointer"
+                                      >
+                                        <Truck className="w-3 h-3" /> Atribuir
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+
+                  {/* Turnos não correspondentes / Outros */}
+                  {(() => {
+                    const unmappedOrders = agendaOrdersForDate.filter(o => 
+                      !activePeriods.some(p => isOrderInPeriod(o, p))
+                    );
+                    if (unmappedOrders.length === 0) return null;
+
+                    return (
+                      <div className="bg-amber-50/60 rounded-3xl p-5 border border-amber-200 space-y-4">
+                        <h3 className="font-black text-sm text-amber-900 flex items-center gap-2">
+                          <Clock className="w-4 h-4 text-amber-600" /> Outros Horários / Sem Turno Definido ({unmappedOrders.length})
+                        </h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                          {unmappedOrders.map(o => (
+                            <div
+                              key={o.id}
+                              onClick={() => setSelectedOrderDetails(o)}
+                              className="bg-white rounded-2xl p-4 border border-amber-300 shadow-xs cursor-pointer"
+                            >
+                              <div className="flex justify-between items-start mb-2">
+                                <span className="text-[10px] font-black bg-amber-100 text-amber-800 px-2 py-0.5 rounded-md">#{o.id}</span>
+                                <span className="font-black text-xs text-slate-900">R$ {o.total.toFixed(2)}</span>
+                              </div>
+                              <h4 className="font-black text-sm text-slate-900">{o.customerName}</h4>
+                              <p className="text-xs text-slate-500 mt-1">{o.scheduledPeriod || o.scheduledTimeRange || 'Sem turno'}</p>
+                              <div className="mt-3 grid grid-cols-2 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleForceActivate(o);
+                                  }}
+                                  className="bg-amber-500 text-slate-950 font-black text-[11px] py-1.5 rounded-xl cursor-pointer"
+                                >
+                                  ⚡ Ativar Agora
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setAssigningOrder(o);
+                                  }}
+                                  className="bg-slate-900 text-white font-black text-[11px] py-1.5 rounded-xl cursor-pointer"
+                                >
+                                  Atribuir
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                </div>
+              </motion.div>
+            </div>
+          );
+        })()}
       </AnimatePresence>
     </div>
   );

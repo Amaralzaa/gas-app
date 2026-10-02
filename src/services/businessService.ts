@@ -71,6 +71,23 @@ export const businessService = {
         .maybeSingle();
 
       if (!error && data) {
+        // Se Supabase tiver delivery_periods, usa. Se não tiver, checa localStorage antes de voltar aos defaults
+        let deliveryPeriods = (data.delivery_periods && Array.isArray(data.delivery_periods) && data.delivery_periods.length > 0)
+          ? data.delivery_periods
+          : null;
+
+        if (!deliveryPeriods) {
+          try {
+            const saved = localStorage.getItem('gas_app_business_settings');
+            if (saved) {
+              const parsed = JSON.parse(saved);
+              if (parsed.deliveryPeriods && Array.isArray(parsed.deliveryPeriods) && parsed.deliveryPeriods.length > 0) {
+                deliveryPeriods = parsed.deliveryPeriods;
+              }
+            }
+          } catch {}
+        }
+
         const info: BusinessInfo = {
           id: data.id || 'default',
           name: data.name || DEFAULT_BUSINESS_INFO.name,
@@ -85,9 +102,7 @@ export const businessService = {
           isOpenOverride: data.is_open_override,
           minOrderValue: Number(data.min_order_value || 0),
           deliveryFee: Number(data.delivery_fee || 0),
-          deliveryPeriods: (data.delivery_periods && Array.isArray(data.delivery_periods) && data.delivery_periods.length > 0)
-            ? data.delivery_periods
-            : DEFAULT_DELIVERY_PERIODS,
+          deliveryPeriods: deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
           updatedAt: data.updated_at
         };
         try {
@@ -120,6 +135,7 @@ export const businessService = {
       const ch = new BroadcastChannel('gas_app_sync_channel');
       ch.postMessage({ type: 'SYNC_BUSINESS_INFO', businessInfo: info });
       ch.close();
+      window.dispatchEvent(new CustomEvent('gas_app_business_info_updated', { detail: info }));
     } catch {}
 
     // 2. Persiste no Supabase
@@ -148,10 +164,42 @@ export const businessService = {
 
       if (error) {
         console.warn('Aviso: Tabela business_settings ainda não possui a coluna ou não existe no Supabase. Salvo no cache local compartilhado.', error.message);
+        if (error.message?.includes('delivery_periods') || error.code === '42703') {
+          const fallbackPayload = { ...payload };
+          delete fallbackPayload.delivery_periods;
+          try {
+            await supabase.from('business_settings').upsert(fallbackPayload);
+          } catch {}
+        }
       }
     } catch (err) {
       console.warn('Erro ao salvar business_settings no Supabase:', err);
     }
+  },
+
+  getValidPeriodsForDay(dayHours: DayHours | undefined, allPeriods?: DeliveryPeriod[]): DeliveryPeriod[] {
+    const list = (allPeriods && allPeriods.length > 0) ? allPeriods : DEFAULT_DELIVERY_PERIODS;
+    const activeList = list.filter(p => p.active !== false);
+
+    if (!dayHours || dayHours.isOpen === false) {
+      return [];
+    }
+
+    const [openH, openM] = (dayHours.open || '08:00').split(':').map(Number);
+    const [closeH, closeM] = (dayHours.close || '19:00').split(':').map(Number);
+    const openMin = (openH || 8) * 60 + (openM || 0);
+    const closeMin = (closeH || 19) * 60 + (closeM || 0);
+
+    return activeList.filter(period => {
+      const [startH, startM] = (period.startTime || '08:00').split(':').map(Number);
+      const [endH, endM] = (period.endTime || '18:00').split(':').map(Number);
+      const periodStart = (startH || 0) * 60 + (startM || 0);
+      const periodEnd = (endH || 0) * 60 + (endM || 0);
+
+      // O período deve se iniciar antes do fechamento da loja
+      // e terminar após a abertura da loja
+      return periodStart < closeMin && periodEnd > openMin;
+    });
   },
 
   isStoreCurrentlyOpen(info?: BusinessInfo): { isOpen: boolean; reason: string; todayHours?: DayHours } {

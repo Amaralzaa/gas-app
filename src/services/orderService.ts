@@ -26,7 +26,24 @@ export const orderService = {
       address: order.address,
       estimated_arrival: order.estimatedArrival,
       feedback: order.feedback || null,
+      delivery_person_id: order.deliveryPersonId || null,
+      delivery_person_location: order.deliveryPersonLocation || null,
     };
+
+    if (order.id) {
+      payload.id = order.id;
+    }
+
+    if (order.completedAt) {
+      const completedNote = `[Concluído em: ${order.completedAt}]`;
+      if (payload.feedback) {
+        if (!payload.feedback.includes('[Concluído em:')) {
+          payload.feedback = `${payload.feedback} | ${completedNote}`;
+        }
+      } else {
+        payload.feedback = completedNote;
+      }
+    }
 
     if (order.isScheduled) {
       payload.is_scheduled = true;
@@ -172,6 +189,14 @@ export const orderService = {
       completedAtDate = dbOrder.estimated_arrival;
     }
 
+    let schedDateISO = dbOrder.scheduled_date_iso;
+    if (!schedDateISO && schedDate) {
+      const match = schedDate.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (match) {
+        schedDateISO = `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`;
+      }
+    }
+
     return {
       id: dbOrder.id,
       customerId: dbOrder.customer_id,
@@ -196,6 +221,7 @@ export const orderService = {
       completedAt: completedAtDate,
       isScheduled: dbOrder.is_scheduled ?? (isSchedFromNote || false),
       scheduledDate: schedDate,
+      scheduledDateISO: schedDateISO,
       scheduledPeriod: schedPeriod,
       scheduledTimeRange: schedRange,
     };

@@ -239,16 +239,26 @@ const LoginView = ({
 
           <div className="pt-4 border-t border-slate-100 text-center">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Acesso Rápido para Demonstração</p>
-            <div className="flex gap-2">
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
                 onClick={() => {
                   const gestor = MOCK_USERS.find(u => u.role === 'gestor');
                   if (gestor) onLogin(gestor);
                 }}
-                className="flex-1 py-2.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-black transition-colors cursor-pointer"
+                className="py-2.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
               >
                 👤 Gestor
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const entregador = MOCK_USERS.find(u => u.role === 'entregador');
+                  if (entregador) onLogin(entregador);
+                }}
+                className="py-2.5 px-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
+              >
+                🛵 Entregador
               </button>
               <button
                 type="button"
@@ -256,9 +266,9 @@ const LoginView = ({
                   const cliente = MOCK_USERS.find(u => u.role === 'cliente');
                   if (cliente) onLogin(cliente);
                 }}
-                className="flex-1 py-2.5 px-3 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-xl text-xs font-black transition-colors cursor-pointer"
+                className="py-2.5 px-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
               >
-                ⭐ Cliente (500 pts)
+                ⭐ Cliente
               </button>
             </div>
           </div>
@@ -399,11 +409,17 @@ export default function App() {
         try { setBusinessInfo(JSON.parse(e.newValue)); } catch {}
       }
     };
-    window.addEventListener('storage', handleStorage);
+    const handleCustomBusinessUpdate = (e: any) => {
+      if (e.detail) {
+        setBusinessInfo(e.detail);
+      }
+    };
+    window.addEventListener('gas_app_business_info_updated', handleCustomBusinessUpdate);
 
     return () => {
       if (channel) channel.close();
       window.removeEventListener('storage', handleStorage);
+      window.removeEventListener('gas_app_business_info_updated', handleCustomBusinessUpdate);
     };
   }, []);
 
@@ -574,7 +590,10 @@ export default function App() {
         setCoverageAreas(fetchedCoverage);
       }
       if (fetchedBusiness) {
-        setBusinessInfo(fetchedBusiness);
+        setBusinessInfo(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(fetchedBusiness)) return prev;
+          return fetchedBusiness;
+        });
       }
     } catch (err) {
       console.warn('Usando dados sincronizados locais:', err);
@@ -678,7 +697,8 @@ export default function App() {
   const handleOrderCreated = async (newOrder: Order) => {
     const localCreated: Order = { 
       ...newOrder, 
-      id: newOrder.id || 'PED-' + Math.floor(100 + Math.random() * 900) 
+      id: newOrder.id || 'PED-' + Math.floor(100 + Math.random() * 900),
+      completedAt: newOrder.status === 'Concluído' ? (newOrder.completedAt || new Date().toISOString()) : newOrder.completedAt
     };
 
     setOrders(prev => {
@@ -693,9 +713,46 @@ export default function App() {
     });
 
     try {
-      await orderService.createOrder(newOrder);
+      const dbCreated = await orderService.createOrder(localCreated);
+      if (dbCreated && dbCreated.id && dbCreated.id !== localCreated.id) {
+        setOrders(prev => {
+          const synced = prev.map(o => o.id === localCreated.id ? dbCreated : o);
+          try {
+            localStorage.setItem('gas_app_orders', JSON.stringify(synced));
+          } catch {}
+          return synced;
+        });
+      }
     } catch (err: any) {
-      console.warn('Sincronização offline: pedido salvo no banco local compartilhado.');
+      console.warn('Sincronização offline: pedido salvo no banco local compartilhado.', err);
+    }
+
+    // Se o pedido já nasce como 'Concluído' (venda presencial do entregador), credita pontos ao cliente
+    if (localCreated.status === 'Concluído') {
+      const multiplier = benefitsConfig?.pointsPerCurrency ?? 10;
+      const earnedPoints = Math.floor(localCreated.total * multiplier);
+      const cleanOrderPhone = (localCreated.phone || '').replace(/\D/g, '');
+      const customer = allUsers.find(u => 
+        u.id === localCreated.customerId || 
+        (cleanOrderPhone && (u.phone || '').replace(/\D/g, '') === cleanOrderPhone)
+      );
+      if (customer) {
+        const historyItem: PointHistoryItem = {
+          id: `order-${localCreated.id}`,
+          userId: customer.id,
+          type: 'earned_order',
+          points: earnedPoints,
+          description: `Compra concluída (Pedido #${localCreated.id})`,
+          orderId: localCreated.id,
+          createdAt: new Date().toISOString()
+        };
+        const updatedCustomer: AppUser = {
+          ...customer,
+          points: (customer.points || 0) + earnedPoints,
+          pointHistory: [historyItem, ...(customer.pointHistory || [])]
+        };
+        await handleUpdateUser(updatedCustomer);
+      }
     }
   };
 
@@ -992,7 +1049,7 @@ export default function App() {
           )}
           
           {currentUser.role === 'entregador' && (
-            <motion.div key="entregador" className="h-full w-full overflow-y-auto" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+            <motion.div key="entregador" className="h-full w-full overflow-hidden flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <DeliveryDashboard 
                 user={currentUser} 
                 orders={orders.filter(o => o.deliveryPersonId === currentUser.id)} 

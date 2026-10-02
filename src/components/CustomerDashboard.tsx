@@ -31,15 +31,16 @@ import {
   Sun, 
   Sunset, 
   Moon,
-  ShoppingCart
+  ShoppingCart,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { MapContainer, TileLayer, GeoJSON, Marker, Popup, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, GeoJSON, Marker, Popup, Polyline, useMap } from 'react-leaflet';
 import L from 'leaflet';
-import { createCirclePolygon } from '../utils/geoUtils';
-import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod, RedeemedReward } from '../types';
+import { createCirclePolygon, haversineKm, estimateMinutes, fetchOsrmRoute } from '../utils/geoUtils';
+import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod, RedeemedReward, OpeningHours, DayHours } from '../types';
 import { PRODUCTS } from '../constants';
-import { businessService, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
+import { businessService, DEFAULT_DELIVERY_PERIODS, DEFAULT_BUSINESS_INFO } from '../services/businessService';
 import { userService } from '../services/userService';
 import { codeService } from '../services/codeService';
 import { rewardService } from '../services/rewardService';
@@ -73,6 +74,7 @@ export interface ScheduledDateOption {
   dayLabel: string;
   shortDate: string;
   fullDisplay: string;
+  isOpen?: boolean;
 }
 
 // ScheduledPeriodSelector — Seletor dinâmico de turnos e dias de agendamento
@@ -105,21 +107,32 @@ const ScheduledPeriodSelector: React.FC<{
           <div className="flex gap-2 overflow-x-auto pb-1.5 pt-0.5 custom-scrollbar">
             {availableDates.map(d => {
               const isSelectedDate = d.isoDate === selectedDateISO;
+              const isClosed = d.isOpen === false;
+
               return (
                 <button
                   key={d.isoDate}
                   type="button"
-                  onClick={() => onSelectDate(d.isoDate)}
-                  className={`flex-shrink-0 px-3 py-2 rounded-xl border text-center transition-all cursor-pointer ${
-                    isSelectedDate
-                      ? 'bg-purple-600 text-white border-purple-600 shadow-md font-black scale-105'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-purple-100/70 hover:border-purple-300'
+                  disabled={isClosed}
+                  onClick={() => !isClosed && onSelectDate(d.isoDate)}
+                  className={`flex-shrink-0 px-3 py-2 rounded-xl border text-center transition-all ${
+                    isClosed
+                      ? 'bg-slate-100 text-slate-400 border-slate-200 opacity-60 cursor-not-allowed'
+                      : isSelectedDate
+                      ? 'bg-purple-600 text-white border-purple-600 shadow-md font-black scale-105 cursor-pointer'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-purple-100/70 hover:border-purple-300 cursor-pointer'
                   }`}
+                  title={isClosed ? 'Fechado neste dia (sem entregas agendadas)' : undefined}
                 >
-                  <span className={`block text-[10px] uppercase font-bold ${isSelectedDate ? 'text-purple-100' : 'text-slate-400'}`}>
+                  <span className={`block text-[10px] uppercase font-bold ${
+                    isClosed ? 'text-slate-400' : isSelectedDate ? 'text-purple-100' : 'text-slate-400'
+                  }`}>
                     {d.dayLabel}
                   </span>
                   <span className="block text-xs font-black">{d.shortDate}</span>
+                  {isClosed && (
+                    <span className="block text-[8px] font-black text-red-500 uppercase mt-0.5">Fechado</span>
+                  )}
                 </button>
               );
             })}
@@ -203,18 +216,30 @@ const ScheduledPeriodSelector: React.FC<{
   );
 };
 
+const RATING_IMPROVEMENT_TAGS = [
+  'Demora na entrega',
+  'Falta de troco',
+  'Botijão com marcas ou sujo',
+  'Atendimento / Comunicação',
+  'Dificuldade com endereço',
+  'Outro',
+] as const;
+
 // HistoryCard — card expansível de histórico de pedidos
 const HistoryCard: React.FC<{ 
   order: Order; 
   onReorder: (order: Order) => void; 
-  onRate?: (order: Order, service: number, delivery: number) => void;
+  onRate?: (order: Order, service: number, delivery: number, feedback?: string) => void;
   onTrack?: (order: Order) => void;
   onCancel?: (order: Order) => void;
-}> = ({ order, onReorder, onRate, onTrack, onCancel }) => {
+  onSkip?: (order: Order) => void;
+}> = ({ order, onReorder, onRate, onTrack, onCancel, onSkip }) => {
   const [expanded, setExpanded] = React.useState(false);
   const [isRating, setIsRating] = React.useState(false);
   const [cardServiceStars, setCardServiceStars] = React.useState(0);
   const [cardDeliveryStars, setCardDeliveryStars] = React.useState(0);
+  const [cardFeedbackTags, setCardFeedbackTags] = React.useState<string[]>([]);
+  const [cardFeedbackComment, setCardFeedbackComment] = React.useState('');
 
   const statusColor = order.status === 'Concluído' ? 'bg-green-100 text-green-700' :
     order.status === 'Em Rota' ? 'bg-blue-100 text-blue-700' :
@@ -223,6 +248,22 @@ const HistoryCard: React.FC<{
 
   const scheduledPeriodLabel = order.scheduledPeriodName 
     || (order.scheduledPeriod === 'manha' ? 'Manhã' : order.scheduledPeriod === 'tarde' ? 'Tarde' : order.scheduledPeriod === 'noite' ? 'Noite' : order.scheduledPeriod);
+
+  const hasLowerThan5Stars = (cardServiceStars > 0 && cardServiceStars < 5) || (cardDeliveryStars > 0 && cardDeliveryStars < 5);
+
+  const handleSendRate = () => {
+    if (!cardServiceStars || !cardDeliveryStars) return;
+    const parts: string[] = [];
+    if (cardFeedbackTags.length > 0) {
+      parts.push(`[Motivos: ${cardFeedbackTags.join(', ')}]`);
+    }
+    if (cardFeedbackComment.trim()) {
+      parts.push(cardFeedbackComment.trim());
+    }
+    const finalFb = parts.join(' - ');
+    onRate?.(order, cardServiceStars, cardDeliveryStars, finalFb || undefined);
+    setIsRating(false);
+  };
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
@@ -355,13 +396,66 @@ const HistoryCard: React.FC<{
                       ))}
                     </div>
                   </div>
-                  <button 
-                    disabled={!cardServiceStars || !cardDeliveryStars}
-                    onClick={() => onRate?.(order, cardServiceStars, cardDeliveryStars)}
-                    className="w-full bg-slate-900 text-white py-2 rounded-lg text-xs font-black hover:bg-slate-800 disabled:opacity-50"
-                  >
-                    ENVIAR
-                  </button>
+
+                  {/* Campo de O que faltou para 5 estrelas */}
+                  {hasLowerThan5Stars && (
+                    <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 space-y-2 text-left">
+                      <div className="flex items-center gap-1.5 text-amber-900">
+                        <MessageSquare className="w-3.5 h-3.5 text-amber-600" />
+                        <span className="text-[11px] font-black uppercase">O que faltou para 5 estrelas?</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {RATING_IMPROVEMENT_TAGS.map(tag => {
+                          const isSelected = cardFeedbackTags.includes(tag);
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => {
+                                setCardFeedbackTags(prev =>
+                                  prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                                );
+                              }}
+                              className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all ${
+                                isSelected
+                                  ? 'bg-amber-500 text-slate-950 border-amber-600'
+                                  : 'bg-white text-slate-600 border-amber-200 hover:bg-amber-100/50'
+                              }`}
+                            >
+                              {isSelected && '✓ '}{tag}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <textarea
+                        rows={2}
+                        value={cardFeedbackComment}
+                        onChange={(e) => setCardFeedbackComment(e.target.value)}
+                        placeholder="Comentário opcional sobre o atendimento/entrega..."
+                        className="w-full text-xs p-2 rounded-lg bg-white border border-amber-200 text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-amber-400 outline-none resize-none font-medium"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <button 
+                      disabled={!cardServiceStars || !cardDeliveryStars}
+                      onClick={handleSendRate}
+                      className="w-full bg-slate-900 text-white py-2 rounded-lg text-xs font-black hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      ENVIAR AVALIAÇÃO
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSkip?.(order);
+                        setIsRating(false);
+                      }}
+                      className="w-full text-slate-400 hover:text-slate-600 font-bold text-[11px] py-1 transition-colors"
+                    >
+                      Pular avaliação
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <button onClick={() => setIsRating(true)} className="w-full py-2 bg-yellow-50 text-yellow-700 font-bold text-xs rounded-lg flex items-center justify-center gap-1 hover:bg-yellow-100">
@@ -408,6 +502,195 @@ const CustomerCoverageFit: React.FC<{ coverageAreas: CoverageArea[] }> = ({ cove
   return null;
 };
 
+const AutoFitBounds: React.FC<{ lat1?: number; lng1?: number; lat2: number; lng2: number }> = ({ lat1, lng1, lat2, lng2 }) => {
+  const map = useMap();
+  useEffect(() => {
+    if (lat1 !== undefined && lng1 !== undefined && lat2 !== undefined && lng2 !== undefined) {
+      try {
+        const bounds = L.latLngBounds([
+          [lat1, lng1],
+          [lat2, lng2]
+        ]);
+        if (bounds.isValid()) {
+          map.fitBounds(bounds, { padding: [35, 35], maxZoom: 16 });
+        }
+      } catch (e) {
+        console.warn('Erro ao ajustar limites do mapa:', e);
+      }
+    }
+  }, [lat1, lng1, lat2, lng2, map]);
+  return null;
+};
+
+const ActiveOrderTrackingSection: React.FC<{
+  activeOrder: Order;
+  deliveryPerson?: AppUser;
+  deliveryLat?: number;
+  deliveryLng?: number;
+  customerLat: number;
+  customerLng: number;
+}> = ({ activeOrder, deliveryPerson, deliveryLat, deliveryLng, customerLat, customerLng }) => {
+  const [routeData, setRouteData] = useState<{
+    coords: [number, number][];
+    minutes: number;
+    distanceKm: number;
+    isOsrm: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!deliveryLat || !deliveryLng) {
+      setRouteData(null);
+      return;
+    }
+
+    // Estimativa inicial imediata via Haversine para não piscar
+    const directKm = haversineKm(deliveryLat, deliveryLng, customerLat, customerLng);
+    const initialMinutes = estimateMinutes(directKm);
+    setRouteData({
+      coords: [[deliveryLat, deliveryLng], [customerLat, customerLng]],
+      minutes: initialMinutes,
+      distanceKm: Number(directKm.toFixed(1)),
+      isOsrm: false,
+    });
+
+    // Busca assíncrona da malha viária real via OSRM
+    let isMounted = true;
+    fetchOsrmRoute(deliveryLng, deliveryLat, customerLng, customerLat).then(res => {
+      if (isMounted && res && res.coords.length > 0) {
+        setRouteData({
+          coords: res.coords,
+          minutes: res.minutes,
+          distanceKm: res.distanceKm,
+          isOsrm: true,
+        });
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [deliveryLat, deliveryLng, customerLat, customerLng]);
+
+  const hasDeliveryLocation = Boolean(deliveryLat && deliveryLng);
+
+  return (
+    <div className="space-y-4 pt-2 border-t border-slate-100">
+      {/* Bloco de Previsão Dinâmica sem dizeres padrão estáticos */}
+      <div className="flex items-center justify-between">
+        <div>
+          {hasDeliveryLocation ? (
+            <>
+              <span className="text-[10px] font-black text-blue-600 uppercase tracking-wider flex items-center gap-1">
+                <Clock className="w-3 h-3" /> Previsão de Chegada
+              </span>
+              <div className="flex items-baseline gap-2 mt-0.5">
+                <p className="text-xl font-black text-slate-900">
+                  {routeData?.minutes
+                    ? new Date(Date.now() + routeData.minutes * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    : '--:--'}
+                </p>
+                {routeData?.minutes && (
+                  <span className="text-xs font-bold text-slate-500">
+                    (~{routeData.minutes} min{routeData.distanceKm ? ` • ${routeData.distanceKm} km` : ''})
+                  </span>
+                )}
+              </div>
+              <p className="text-[10px] text-blue-700 font-bold mt-0.5">
+                {routeData?.isOsrm ? '✓ Rota em tempo real via tráfego' : '✓ Entregador a caminho do seu local'}
+              </p>
+            </>
+          ) : (
+            <>
+              <span className="text-[10px] font-black text-blue-600 uppercase tracking-wider flex items-center gap-1">
+                <Truck className="w-3 h-3" /> Entregador em Deslocamento
+              </span>
+              <p className="text-base font-black text-slate-900 mt-0.5">
+                A caminho do seu endereço
+              </p>
+              <p className="text-[11px] text-slate-500 font-medium">
+                Você pode acompanhar a localização assim que o GPS conectar.
+              </p>
+            </>
+          )}
+        </div>
+        <div className="bg-yellow-400 p-2.5 rounded-2xl shadow-sm">
+          <Truck className="text-slate-900 w-5 h-5" />
+        </div>
+      </div>
+
+      {/* Mapa Leaflet com Moto, Casa e Rota Polyline */}
+      <div className="rounded-2xl overflow-hidden border border-slate-200 relative z-0 isolate shadow-xs" style={{ height: '230px' }}>
+        <MapContainer
+          center={[deliveryLat ?? customerLat, deliveryLng ?? customerLng]}
+          zoom={15}
+          style={{ height: '100%', width: '100%' }}
+          zoomControl={false}
+        >
+          <TileLayer
+            url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+          />
+          {hasDeliveryLocation && (
+            <AutoFitBounds lat1={deliveryLat} lng1={deliveryLng} lat2={customerLat} lng2={customerLng} />
+          )}
+
+          {/* Rota (Linha de Percurso) */}
+          {hasDeliveryLocation && routeData?.coords && routeData.coords.length >= 2 && (
+            <Polyline
+              positions={routeData.coords}
+              color="#2563eb"
+              weight={4}
+              opacity={0.85}
+              dashArray={routeData.isOsrm ? undefined : '8, 8'}
+            />
+          )}
+
+          {/* Marcador da Casa do Cliente */}
+          <Marker position={[customerLat, customerLng]} icon={houseIcon}>
+            <Popup>
+              <div className="font-bold text-sm">🏠 Sua Casa</div>
+              <div className="text-xs text-slate-500">{activeOrder.address.street}, {activeOrder.address.number}</div>
+            </Popup>
+          </Marker>
+
+          {/* Marcador do Entregador */}
+          {deliveryLat && deliveryLng && (
+            <Marker position={[deliveryLat, deliveryLng]} icon={motoIcon}>
+              <Popup>
+                <div className="font-bold text-sm">🛵 {deliveryPerson?.name || 'Entregador'}</div>
+                <div className="text-xs text-slate-500">
+                  {routeData?.minutes ? `Chegada em ~${routeData.minutes} min` : 'A caminho do seu endereço'}
+                </div>
+              </Popup>
+            </Marker>
+          )}
+        </MapContainer>
+      </div>
+
+      {/* Dados do Entregador com WhatsApp */}
+      <div className="flex items-center gap-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-100">
+        <div className="w-10 h-10 bg-yellow-400 rounded-full flex items-center justify-center shadow-xs">
+          <Truck className="text-slate-900 w-5 h-5" />
+        </div>
+        <div>
+          <p className="text-[10px] font-bold text-slate-400 uppercase">Entregador Responsável</p>
+          <p className="font-black text-sm text-slate-900">{deliveryPerson?.name || 'Entregador'}</p>
+        </div>
+        {deliveryPerson?.phone && (
+          <a
+            href={`https://wa.me/55${deliveryPerson.phone.replace(/\D/g, '')}`}
+            target="_blank"
+            rel="noreferrer"
+            className="ml-auto bg-green-500 p-2.5 rounded-xl shadow-sm text-white hover:bg-green-600 transition-colors"
+          >
+            <Phone className="w-4 h-4" />
+          </a>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ 
   user, orders, onOrderCreated, onUpdateUser, initialTab, coverageAreas, coupons, rewards, referrals, onAddReferral, onUpdateReferral, onDeleteReferral, allUsers, allDeliveryPersons, onUpdateOrder, benefitsConfig, onLogout, businessInfo
 }) => {
@@ -426,6 +709,31 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const [localRating, setLocalRating] = useState<{orderId: string, service: number, delivery: number} | null>(null);
   const [serviceStars, setServiceStars] = useState(0);
   const [deliveryStars, setDeliveryStars] = useState(0);
+  const [skippedRatingOrderIds, setSkippedRatingOrderIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('gas_app_skipped_ratings') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [feedbackTags, setFeedbackTags] = useState<string[]>([]);
+  const [feedbackComment, setFeedbackComment] = useState('');
+
+  const handleSkipRating = (orderId: string) => {
+    setSkippedRatingOrderIds(prev => {
+      const updated = Array.from(new Set([...prev, orderId]));
+      try {
+        localStorage.setItem('gas_app_skipped_ratings', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+    setServiceStars(0);
+    setDeliveryStars(0);
+    setFeedbackTags([]);
+    setFeedbackComment('');
+    setActiveTab('home');
+  };
+
   const [ratingSuccessModal, setRatingSuccessModal] = useState<{ order: Order; serviceRating: number; deliveryRating: number } | null>(null);
   const [referralTab, setReferralTab] = useState<'pontos' | 'indicacoes'>('pontos');
 
@@ -438,38 +746,22 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     return activeOnes.length > 0 ? activeOnes : DEFAULT_DELIVERY_PERIODS;
   }, [businessInfo?.deliveryPeriods]);
 
-  const [selectedPeriodId, setSelectedPeriodId] = useState<string>(() => {
-    return (businessInfo?.deliveryPeriods?.find(p => p.active !== false)?.id) || 'manha';
-  });
-
-  // Atualiza se o selectedPeriodId não existir mais nos ativos
-  useEffect(() => {
-    if (!activeDeliveryPeriods.some(p => p.id === selectedPeriodId)) {
-      if (activeDeliveryPeriods[0]) {
-        setSelectedPeriodId(activeDeliveryPeriods[0].id);
-      }
-    }
-  }, [activeDeliveryPeriods, selectedPeriodId]);
-
-  const currentSelectedPeriod = useMemo(() => {
-    return activeDeliveryPeriods.find(p => p.id === selectedPeriodId) || activeDeliveryPeriods[0];
-  }, [activeDeliveryPeriods, selectedPeriodId]);
-
-  // Status da loja baseado em horários ou override manual do gestor
-  const storeStatus = useMemo(() => {
-    return businessService.isStoreCurrentlyOpen(businessInfo);
-  }, [businessInfo]);
-
   // Datas disponíveis para agendamento (próximos 7 dias)
   const availableScheduledDates = useMemo<ScheduledDateOption[]>(() => {
     const dates: ScheduledDateOption[] = [];
     const now = new Date();
+    const DAY_INDEX_MAP: Array<keyof OpeningHours> = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+
     for (let i = 1; i <= 7; i++) {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + i);
       const year = d.getFullYear();
       const month = String(d.getMonth() + 1).padStart(2, '0');
       const day = String(d.getDate()).padStart(2, '0');
       const isoDate = `${year}-${month}-${day}`;
+
+      const dayKey = DAY_INDEX_MAP[d.getDay()];
+      const dayHours = businessInfo?.openingHours?.[dayKey] ?? DEFAULT_BUSINESS_INFO.openingHours[dayKey];
+      const isOpen = dayHours?.isOpen !== false;
 
       const rawWeekday = d.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '');
       const dayLabel = i === 1 ? 'Amanhã' : rawWeekday.charAt(0).toUpperCase() + rawWeekday.slice(1);
@@ -478,10 +770,10 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       const capitalizedFullWeekday = fullWeekday.charAt(0).toUpperCase() + fullWeekday.slice(1);
       const fullDisplay = `${shortDate}/${year} (${capitalizedFullWeekday})`;
 
-      dates.push({ isoDate, dayLabel, shortDate, fullDisplay });
+      dates.push({ isoDate, dayLabel, shortDate, fullDisplay, isOpen });
     }
     return dates;
-  }, []);
+  }, [businessInfo?.openingHours]);
 
   const [selectedScheduledDateISO, setSelectedScheduledDateISO] = useState<string>(() => {
     const tomorrow = new Date(Date.now() + 86400000);
@@ -491,14 +783,61 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     return `${y}-${m}-${d}`;
   });
 
+  // Se a data selecionada atualmente estiver fechada, avança para a primeira data aberta disponível
+  useEffect(() => {
+    const currentOpt = availableScheduledDates.find(d => d.isoDate === selectedScheduledDateISO);
+    if (!currentOpt || currentOpt.isOpen === false) {
+      const firstOpen = availableScheduledDates.find(d => d.isOpen !== false);
+      if (firstOpen) {
+        setSelectedScheduledDateISO(firstOpen.isoDate);
+      }
+    }
+  }, [availableScheduledDates, selectedScheduledDateISO]);
+
   const scheduledDateInfo = useMemo(() => {
     const found = availableScheduledDates.find(d => d.isoDate === selectedScheduledDateISO);
     if (found) return { display: found.fullDisplay, fullDisplay: found.fullDisplay, dayLabel: found.dayLabel };
-    const first = availableScheduledDates[0];
-    return first 
-      ? { display: first.fullDisplay, fullDisplay: first.fullDisplay, dayLabel: first.dayLabel }
+    const firstOpen = availableScheduledDates.find(d => d.isOpen !== false) || availableScheduledDates[0];
+    return firstOpen 
+      ? { display: firstOpen.fullDisplay, fullDisplay: firstOpen.fullDisplay, dayLabel: firstOpen.dayLabel }
       : { display: 'Amanhã', fullDisplay: 'Amanhã', dayLabel: 'Amanhã' };
   }, [availableScheduledDates, selectedScheduledDateISO]);
+
+  // Períodos válidos de acordo com o horário de funcionamento do dia selecionado
+  const periodsForSelectedDate = useMemo(() => {
+    if (!selectedScheduledDateISO) return activeDeliveryPeriods;
+    const parts = selectedScheduledDateISO.split('-');
+    if (parts.length < 3) return activeDeliveryPeriods;
+    const d = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+    const DAY_INDEX_MAP: Array<keyof OpeningHours> = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const dayKey = DAY_INDEX_MAP[d.getDay()];
+    const dayHours = businessInfo?.openingHours?.[dayKey] ?? DEFAULT_BUSINESS_INFO.openingHours[dayKey];
+
+    const valid = businessService.getValidPeriodsForDay(dayHours, activeDeliveryPeriods);
+    return valid.length > 0 ? valid : activeDeliveryPeriods;
+  }, [selectedScheduledDateISO, businessInfo?.openingHours, activeDeliveryPeriods]);
+
+  const [selectedPeriodId, setSelectedPeriodId] = useState<string>(() => {
+    return (businessInfo?.deliveryPeriods?.find(p => p.active !== false)?.id) || 'manha';
+  });
+
+  // Atualiza se o selectedPeriodId não existir mais nos períodos válidos para a data
+  useEffect(() => {
+    if (!periodsForSelectedDate.some(p => p.id === selectedPeriodId)) {
+      if (periodsForSelectedDate[0]) {
+        setSelectedPeriodId(periodsForSelectedDate[0].id);
+      }
+    }
+  }, [periodsForSelectedDate, selectedPeriodId]);
+
+  const currentSelectedPeriod = useMemo(() => {
+    return periodsForSelectedDate.find(p => p.id === selectedPeriodId) || periodsForSelectedDate[0] || activeDeliveryPeriods[0];
+  }, [periodsForSelectedDate, selectedPeriodId, activeDeliveryPeriods]);
+
+  // Status da loja baseado em horários ou override manual do gestor
+  const storeStatus = useMemo(() => {
+    return businessService.isStoreCurrentlyOpen(businessInfo);
+  }, [businessInfo]);
 
   // Se a loja estiver fechada para pedidos imediatos, seleciona agendamento por padrão
   useEffect(() => {
@@ -1905,7 +2244,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   {/* No segundo item: abrir o seletor dinâmico com possibilidade de escolher qualquer período */}
                   {deliveryType === 'scheduled' && (
                     <ScheduledPeriodSelector
-                      periods={activeDeliveryPeriods}
+                      periods={periodsForSelectedDate}
                       selectedId={selectedPeriodId}
                       onSelect={setSelectedPeriodId}
                       availableDates={availableScheduledDates}
@@ -2107,6 +2446,62 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </div>
                 </div>
 
+                {/* Card Modalidade da Entrega (Agendada ou Imediata) - Posicionado ACIMA do Subtotal dos Itens */}
+                <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {deliveryType === 'scheduled' ? (
+                        <>
+                          <Calendar className="w-4 h-4 text-purple-600" />
+                          <p className="text-xs font-black text-slate-900 uppercase">Entrega Agendada</p>
+                        </>
+                      ) : (
+                        <>
+                          <Zap className="w-4 h-4 text-emerald-600" />
+                          <p className="text-xs font-black text-slate-900 uppercase">Entrega Imediata</p>
+                        </>
+                      )}
+                    </div>
+                    <button 
+                      type="button"
+                      onClick={() => setStep('checkout')}
+                      className="text-[11px] font-black text-amber-600 hover:text-amber-700 uppercase bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                    >
+                      Alterar
+                    </button>
+                  </div>
+
+                  {deliveryType === 'scheduled' ? (
+                    <div className="flex items-center gap-3 mt-1 bg-purple-50/80 p-3.5 rounded-2xl border border-purple-200/70">
+                      <div className="w-9 h-9 rounded-xl bg-purple-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <Calendar className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-black text-sm text-purple-950">
+                          {scheduledDateInfo.fullDisplay}
+                        </p>
+                        <p className="text-xs font-bold text-purple-700 mt-0.5">
+                          Turno {currentSelectedPeriod?.name} ({currentSelectedPeriod?.startTime} às {currentSelectedPeriod?.endTime})
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-3 mt-1 bg-emerald-50/80 p-3.5 rounded-2xl border border-emerald-200/70">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+                        <Clock className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-black text-sm text-emerald-950">
+                          Previsão estimada: 25 a 45 minutos
+                        </p>
+                        <p className="text-xs text-emerald-700 mt-0.5 font-medium">
+                          Entrega rápida no seu endereço após confirmação
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
                 {/* Card Resumo Financeiro */}
                 <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 space-y-2">
                   <div className="flex justify-between text-xs">
@@ -2131,17 +2526,6 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     <p className="text-[11px] text-yellow-800 font-bold">
                       🎉 Você ganhará <span className="font-black text-yellow-900">{Math.floor(cartTotal * 10)} pontos</span> com este pedido!
                     </p>
-                  </div>
-                </div>
-
-                {/* Estimativa de entrega */}
-                <div className="bg-blue-50 border border-blue-100 rounded-2xl p-4 flex items-center gap-3">
-                  <div className="p-2 rounded-xl bg-blue-500 text-white">
-                    <Clock className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <p className="text-xs font-black text-blue-900">Entrega Estimada</p>
-                    <p className="text-[11px] text-blue-700">De 25 a 45 minutos no seu endereço</p>
                   </div>
                 </div>
 
@@ -2299,11 +2683,18 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         setStep('catalog');
                         setActiveTab('home');
                       }}
-                      onRate={(order, service, delivery) => {
+                      onRate={(order, service, delivery, feedback) => {
                         if (onUpdateOrder) {
-                          onUpdateOrder({ ...order, rating: service, serviceRating: service, deliveryRating: delivery });
+                          const updated = {
+                            ...order,
+                            rating: service,
+                            serviceRating: service,
+                            deliveryRating: delivery,
+                            ...(feedback ? { feedback: order.feedback ? `${order.feedback} | ${feedback}` : feedback } : {})
+                          };
+                          onUpdateOrder(updated);
                           setLocalRating({ orderId: order.id, service, delivery });
-                          setRatingSuccessModal({ order, serviceRating: service, deliveryRating: delivery });
+                          setRatingSuccessModal({ order: updated, serviceRating: service, deliveryRating: delivery });
                         }
                       }}
                       onTrack={(order) => {
@@ -2312,6 +2703,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       }}
                       onCancel={(order) => {
                         handleOpenCancelModal(order);
+                      }}
+                      onSkip={(order) => {
+                        handleSkipRating(order.id);
                       }}
                     />
                   );
@@ -2610,7 +3004,14 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
               const unratedConcludedOrder = [...orders]
-                .filter(o => isUserOrder(o) && o.status === 'Concluído' && !o.rating && localRating?.orderId !== o.id)
+                .filter(o => 
+                  isUserOrder(o) && 
+                  o.status === 'Concluído' && 
+                  o.status !== 'Cancelado' &&
+                  !o.rating && 
+                  localRating?.orderId !== o.id &&
+                  !skippedRatingOrderIds.includes(o.id)
+                )
                 .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
 
               // Se não há pedidos ativos nem pedidos para avaliar
@@ -2637,6 +3038,8 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
               // Se não há pedidos ativos, mas há um pedido concluído pendente de avaliação
               if (activeOrders.length === 0 && unratedConcludedOrder) {
+                const hasLowerThan5 = (serviceStars > 0 && serviceStars < 5) || (deliveryStars > 0 && deliveryStars < 5);
+
                 return (
                   <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="text-center bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
                     <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -2644,7 +3047,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     </div>
                     <h2 className="text-2xl font-black text-slate-900 mb-6">Entrega Realizada!</h2>
                     
-                    <div className="space-y-6 mb-8">
+                    <div className="space-y-6 mb-6">
                       <div>
                         <p className="text-sm font-bold text-slate-900 mb-2">Avalie nosso atendimento (Porto Gás)</p>
                         <div className="flex justify-center gap-2">
@@ -2668,18 +3071,96 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       </div>
                     </div>
 
+                    {/* Detalhamento caso nota seja inferior a 5 estrelas */}
+                    {hasLowerThan5 && (
+                      <motion.div 
+                        initial={{ opacity: 0, y: 10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="bg-amber-50/70 border border-amber-200/80 rounded-2xl p-4 text-left space-y-3 mb-6"
+                      >
+                        <div className="flex items-center gap-2 text-amber-900">
+                          <MessageSquare className="w-4 h-4 text-amber-600" />
+                          <span className="text-xs font-black uppercase tracking-wider">
+                            O que faltou para 5 estrelas?
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600 font-medium">
+                          Selecione um ou mais motivos para nos ajudar a melhorar nosso serviço:
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {RATING_IMPROVEMENT_TAGS.map(tag => {
+                            const isSelected = feedbackTags.includes(tag);
+                            return (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => {
+                                  setFeedbackTags(prev => 
+                                    prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+                                  );
+                                }}
+                                className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all ${
+                                  isSelected
+                                    ? 'bg-amber-500 text-slate-950 border-amber-600 shadow-xs scale-[1.02]'
+                                    : 'bg-white text-slate-700 border-amber-200 hover:bg-amber-100/60'
+                                }`}
+                              >
+                                {isSelected && '✓ '}{tag}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <textarea
+                          rows={2}
+                          value={feedbackComment}
+                          onChange={(e) => setFeedbackComment(e.target.value)}
+                          placeholder="Conte mais detalhes sobre o que aconteceu (opcional)..."
+                          className="w-full text-xs p-3 rounded-xl bg-white border border-amber-200 text-slate-800 placeholder-slate-400 focus:ring-2 focus:ring-amber-400 outline-none resize-none font-medium"
+                        />
+                      </motion.div>
+                    )}
+
                     <button 
                       disabled={!serviceStars || !deliveryStars}
                       onClick={() => {
                         if (onUpdateOrder) {
+                          const parts: string[] = [];
+                          if (feedbackTags.length > 0) {
+                            parts.push(`[Motivos: ${feedbackTags.join(', ')}]`);
+                          }
+                          if (feedbackComment.trim()) {
+                            parts.push(feedbackComment.trim());
+                          }
+                          const finalFb = parts.join(' - ');
+                          const currentFb = unratedConcludedOrder.feedback;
+                          const mergedFb = finalFb ? (currentFb ? `${currentFb} | ${finalFb}` : finalFb) : currentFb;
+
+                          const updatedOrder = {
+                            ...unratedConcludedOrder,
+                            rating: serviceStars,
+                            serviceRating: serviceStars,
+                            deliveryRating: deliveryStars,
+                            ...(mergedFb ? { feedback: mergedFb } : {})
+                          };
+
                           setLocalRating({ orderId: unratedConcludedOrder.id, service: serviceStars, delivery: deliveryStars });
-                          onUpdateOrder({ ...unratedConcludedOrder, rating: serviceStars, serviceRating: serviceStars, deliveryRating: deliveryStars });
-                          setRatingSuccessModal({ order: unratedConcludedOrder, serviceRating: serviceStars, deliveryRating: deliveryStars });
+                          onUpdateOrder(updatedOrder);
+                          setRatingSuccessModal({ order: updatedOrder, serviceRating: serviceStars, deliveryRating: deliveryStars });
+                          setFeedbackTags([]);
+                          setFeedbackComment('');
                         }
                       }}
-                      className="w-full mb-4 bg-slate-900 text-white py-4 rounded-2xl font-black text-sm hover:bg-slate-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="w-full mb-3 bg-slate-900 text-white py-4 rounded-2xl font-black text-sm hover:bg-slate-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-slate-900/10"
                     >
                       ENVIAR AVALIAÇÃO
+                    </button>
+
+                    <button 
+                      type="button"
+                      onClick={() => handleSkipRating(unratedConcludedOrder.id)}
+                      className="w-full text-slate-400 hover:text-slate-600 font-bold text-xs py-2 transition-colors mb-3"
+                    >
+                      Pular avaliação
                     </button>
 
                     <button 
@@ -2800,74 +3281,16 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           </div>
                         </div>
 
-                        {/* Se estiver Em Rota: Exibir Mapa e Detalhes do Entregador */}
+                        {/* Se estiver Em Rota: Exibir Mapa com Rota Dinâmica e Detalhes do Entregador */}
                         {activeOrder.status === 'Em Rota' && (
-                          <div className="space-y-4 pt-2 border-t border-slate-100">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Previsão de Chegada</p>
-                                <p className="text-xl font-black text-slate-900">
-                                  {activeOrder.estimatedArrival 
-                                    ? new Date(new Date(activeOrder.estimatedArrival).getTime() + 5 * 60000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) 
-                                    : '--:--'}
-                                </p>
-                                <p className="text-[10px] text-yellow-600 font-bold">✓ 5min de margem de segurança</p>
-                              </div>
-                              <div className="bg-yellow-400 p-2.5 rounded-2xl">
-                                <Truck className="text-slate-900 w-5 h-5" />
-                              </div>
-                            </div>
-
-                            {/* Mapa Leaflet com Moto e Casa */}
-                            <div className="rounded-2xl overflow-hidden border border-slate-200 relative z-0 isolate" style={{ height: '220px' }}>
-                              <MapContainer
-                                center={[deliveryLat ?? customerLat, deliveryLng ?? customerLng]}
-                                zoom={15}
-                                style={{ height: '100%', width: '100%' }}
-                                zoomControl={false}
-                              >
-                                <TileLayer
-                                  url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                                />
-                                <Marker position={[customerLat, customerLng]} icon={houseIcon}>
-                                  <Popup>
-                                    <div className="font-bold text-sm">🏠 Sua Casa</div>
-                                    <div className="text-xs text-slate-500">{activeOrder.address.street}, {activeOrder.address.number}</div>
-                                  </Popup>
-                                </Marker>
-                                {deliveryLat && deliveryLng && (
-                                  <Marker position={[deliveryLat, deliveryLng]} icon={motoIcon}>
-                                    <Popup>
-                                      <div className="font-bold text-sm">🛵 {deliveryPerson?.name || 'Entregador'}</div>
-                                      <div className="text-xs text-slate-500">A caminho do seu endereço</div>
-                                    </Popup>
-                                  </Marker>
-                                )}
-                              </MapContainer>
-                            </div>
-
-                            {/* Dados do Entregador com WhatsApp */}
-                            <div className="flex items-center gap-3 p-3.5 bg-slate-50 rounded-2xl">
-                              <div className="w-10 h-10 bg-yellow-400 rounded-full flex items-center justify-center">
-                                <Truck className="text-slate-900 w-5 h-5" />
-                              </div>
-                              <div>
-                                <p className="text-[10px] font-bold text-slate-400 uppercase">Entregador em Rota</p>
-                                <p className="font-black text-sm text-slate-900">{deliveryPerson?.name || 'Entregador'}</p>
-                              </div>
-                              {deliveryPerson?.phone && (
-                                <a
-                                  href={`https://wa.me/55${deliveryPerson.phone.replace(/\D/g, '')}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="ml-auto bg-green-500 p-2.5 rounded-xl shadow-sm text-white hover:bg-green-600 transition-colors"
-                                >
-                                  <Phone className="w-4 h-4" />
-                                </a>
-                              )}
-                            </div>
-                          </div>
+                          <ActiveOrderTrackingSection
+                            activeOrder={activeOrder}
+                            deliveryPerson={deliveryPerson}
+                            deliveryLat={deliveryLat}
+                            deliveryLng={deliveryLng}
+                            customerLat={customerLat}
+                            customerLng={customerLng}
+                          />
                         )}
 
                         {/* Botão de Cancelar no Card do Pedido */}
@@ -3315,7 +3738,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         Seu pedido <strong className="text-slate-800">#{cancelModalOrder.id}</strong> foi cancelado com sucesso.
                       </p>
                       <button
-                        onClick={() => setCancelModalOrder(null)}
+                        onClick={() => {
+                          setCancelModalOrder(null);
+                          setCancelStage('confirm');
+                          setSelectedTrackingOrderId(null);
+                          setActiveTab('home');
+                        }}
                         className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 rounded-2xl text-xs transition-all shadow-lg shadow-slate-900/15"
                       >
                         OK, ENTENDI

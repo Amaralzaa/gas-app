@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   Truck, 
   DollarSign, 
@@ -9,15 +9,26 @@ import {
   Check, 
   X, 
   User, 
-  Package,
-  ArrowRight,
-  Minus,
-  CreditCard,
-  History,
-  MessageSquare,
-  Phone,
-  Map as MapIcon,
-  Calendar
+  Package, 
+  ArrowRight, 
+  Minus, 
+  CreditCard, 
+  History, 
+  MessageSquare, 
+  Phone, 
+  Map as MapIcon, 
+  Calendar,
+  Wallet,
+  Receipt,
+  Share2,
+  TrendingDown,
+  TrendingUp,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  Compass,
+  Building2,
+  Banknote
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -51,28 +62,53 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   businessInfo 
 }) => {
   const [activeTab, setActiveTab] = useState<'deliveries' | 'map' | 'finance'>('deliveries');
+  
+  // Modais de Ação
+  const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
   const [isAddingSale, setIsAddingSale] = useState(false);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
-  
-  // New Sale State
+  const [isAddingSettlement, setIsAddingSettlement] = useState(false); // Prestação de contas / Baixa
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Estado para Nova Venda
+  const [saleCustomerType, setSaleCustomerType] = useState<'existing' | 'walkin'>('walkin');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<AppUser | null>(null);
-  const [cart, setCart] = useState<{ [id: string]: number }>({});
+  const [walkinName, setWalkinName] = useState('');
+  const [walkinPhone, setWalkinPhone] = useState('');
+  const [walkinStreet, setWalkinStreet] = useState('');
+  const [walkinNeighborhood, setWalkinNeighborhood] = useState('');
+  const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'Dinheiro' | 'Pix' | 'Cartão de Débito' | 'Cartão de Crédito'>('Dinheiro');
+  const [cart, setCart] = useState<{ [id: string]: number }>({ p13: 1 });
 
-  const [gpsStatus, setGpsStatus] = useState<string>('Aguardando...');
+  // Estado para Lançar Despesa
+  const [expenseDesc, setExpenseDesc] = useState('');
+  const [expenseAmount, setExpenseAmount] = useState('');
+  const [expenseCategory, setExpenseCategory] = useState<'Combustível' | 'Alimentação' | 'Manutenção Moto' | 'Outros'>('Combustível');
 
+  // Estado para Prestação de Contas (Baixa de Caixa)
+  const [settlementAmount, setSettlementAmount] = useState('');
+  const [settlementRecipient, setSettlementRecipient] = useState('');
+  const [settlementNote, setSettlementNote] = useState('');
+
+  // GPS Tracking
+  const [gpsStatus, setGpsStatus] = useState<string>('Aguardando GPS...');
   const lastLocationRef = useRef<{ lat: number; lng: number } | null>(null);
   const lastUpdateRef = useRef<number>(0);
 
+  const showToast = (msg: string) => {
+    setToastMessage(msg);
+    setTimeout(() => {
+      setToastMessage(null);
+    }, 3500);
+  };
+
   const updateLocation = (lat: number, lng: number) => {
     const now = Date.now();
-    // Limita atualizações a no máximo 1 a cada 4 segundos se a variação for insignificante
     if (lastLocationRef.current && (now - lastUpdateRef.current < 4000)) {
       const distLat = Math.abs(lastLocationRef.current.lat - lat);
       const distLng = Math.abs(lastLocationRef.current.lng - lng);
-      if (distLat < 0.00008 && distLng < 0.00008) {
-        return;
-      }
+      if (distLat < 0.00008 && distLng < 0.00008) return;
     }
     lastLocationRef.current = { lat, lng };
     lastUpdateRef.current = now;
@@ -85,7 +121,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       });
   };
 
-  // GPS Tracking
+  // GPS Watcher
   useEffect(() => {
     let watchId: number;
     if ('geolocation' in navigator) {
@@ -98,27 +134,26 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           updateLocation(lat, lng);
         },
         (error) => {
-          console.warn('Erro ao acessar GPS do entregador:', error.message);
-          setGpsStatus(`Aviso GPS: ${error.message}`);
+          console.warn('Erro ao acessar GPS:', error.message);
+          setGpsStatus(`GPS: ${error.message}`);
         },
         { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 }
       );
     } else {
-      setGpsStatus('GPS não suportado neste navegador');
+      setGpsStatus('GPS não suportado neste aparelho');
     }
     return () => {
       if (watchId) navigator.geolocation.clearWatch(watchId);
     };
   }, []);
 
-  // --- Notificação sonora: pedido atribuído ao Entregador ---
+  // Notificação sonora quando novo pedido é atribuído
   const isInitialLoadRef = useRef(true);
   const prevAssignedIdsRef = useRef<Set<string>>(
     new Set(orders.filter(o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')).map(o => o.id))
   );
   const audioUnlockedRef = useRef(false);
 
-  // Desbloqueia áudio na primeira interação
   useEffect(() => {
     const unlock = () => {
       if (!audioUnlockedRef.current) {
@@ -139,7 +174,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       o => o.deliveryPersonId === user.id && (o.status === 'Atribuído' || o.status === 'Em Rota')
     );
 
-    // Evita disparar alerta para pedidos que já estavam atribuídos na abertura inicial da página
     if (isInitialLoadRef.current) {
       if (orders.length > 0) {
         isInitialLoadRef.current = false;
@@ -149,10 +183,8 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     }
 
     const newAssigned = myAssigned.filter(o => !prevAssignedIdsRef.current.has(o.id));
-
     if (newAssigned.length > 0) {
       playAssignedOrderSound().catch(() => {});
-
       newAssigned.forEach(o => {
         const street = o.address?.street || 'Endereço';
         const neighborhood = o.address?.neighborhood || '';
@@ -167,7 +199,6 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     prevAssignedIdsRef.current = new Set(myAssigned.map(o => o.id));
   }, [orders, user.id]);
 
-
   const handleForceGps = () => {
     if ('geolocation' in navigator) {
       setGpsStatus('Buscando sinal GPS...');
@@ -177,10 +208,11 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           const lng = pos.coords.longitude;
           setGpsStatus(`GPS Ativo: ${lat.toFixed(4)}, ${lng.toFixed(4)}`);
           updateLocation(lat, lng);
+          showToast('Sinal GPS atualizado com sucesso!');
         },
         (err) => {
-          alert('Não foi possível obter GPS: ' + err.message);
           setGpsStatus(`Erro GPS: ${err.message}`);
+          showToast('Erro ao obter GPS: ' + err.message);
         },
         { enableHighAccuracy: true, timeout: 10000 }
       );
@@ -195,161 +227,543 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     const currentLat = user.location?.lat ?? (targetLat - 0.008);
     const currentLng = user.location?.lng ?? (targetLng - 0.008);
 
-    // Anda 20% em direção ao destino do cliente
     const nextLat = currentLat + (targetLat - currentLat) * 0.25;
     const nextLng = currentLng + (targetLng - currentLng) * 0.25;
 
     setGpsStatus(`Simulado: ${nextLat.toFixed(4)}, ${nextLng.toFixed(4)}`);
     updateLocation(nextLat, nextLng);
+    showToast('Posição simulada avançada.');
   };
 
-  const myDeliveries = orders
-    .filter(o => o.deliveryPersonId === user.id && (o.status === 'Em Rota' || o.status === 'Atribuído'))
-    .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  // Pedidos do Entregador
+  const myDeliveries = useMemo(() => {
+    return orders
+      .filter(o => o.deliveryPersonId === user.id && (o.status === 'Em Rota' || o.status === 'Atribuído'))
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [orders, user.id]);
 
-  const myCompletedToday = orders.filter(o => {
-    if (o.deliveryPersonId !== user.id || o.status !== 'Concluído') return false;
-    const orderDate = new Date(o.createdAt);
+  const nextActiveDelivery = myDeliveries[0] || null;
+
+  // Concluídos Hoje
+  const isToday = (dateStr?: string) => {
+    if (!dateStr) return false;
+    const d = new Date(dateStr);
     const today = new Date();
-    return orderDate.toDateString() === today.toDateString();
-  });
-  const myExpenses = expenses.filter(e => e.userId === user.id);
-  const todayExpenses = myExpenses.filter(e => {
-    const d = new Date(e.date);
-    return d.toDateString() === new Date().toDateString();
-  });
-
-  const filteredCustomers = allCustomers.filter(c => 
-    c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    c.addresses?.some(a => a.street.toLowerCase().includes(searchQuery.toLowerCase()))
-  );
-
-  const cartTotal = Object.entries(cart).reduce((acc, [id, qty]) => {
-    const product = PRODUCTS.find(p => p.id === id);
-    return acc + (product?.price || 0) * (qty as number);
-  }, 0);
-
-  const handleComplete = (order: Order) => {
-    onUpdateOrder({ ...order, status: 'Concluído', completedAt: new Date().toISOString() });
+    return d.getDate() === today.getDate() &&
+      d.getMonth() === today.getMonth() &&
+      d.getFullYear() === today.getFullYear();
   };
 
-  const handleNewSale = () => {
-    if (!selectedCustomer || !selectedCustomer.addresses?.[0]) return;
-    const newOrder: Order = {
-      id: 'SALE-' + Math.random().toString(36).substr(2, 5).toUpperCase(),
-      customerId: selectedCustomer.id,
-      customerName: selectedCustomer.name,
-      phone: selectedCustomer.phone || '',
-      address: selectedCustomer.addresses[0],
-      items: Object.entries(cart).map(([id, qty]) => ({
-        productId: id,
-        quantity: qty as number,
-        priceAtTime: PRODUCTS.find(p => p.id === id)?.price || 0
-      })),
+  const myCompletedToday = useMemo(() => {
+    return orders.filter(o => {
+      if (o.deliveryPersonId !== user.id || o.status !== 'Concluído') return false;
+      return isToday(o.completedAt || o.createdAt);
+    });
+  }, [orders, user.id]);
+
+  // Despesas e Baixas do Entregador
+  const myExpensesToday = useMemo(() => {
+    return expenses.filter(e => e.userId === user.id && isToday(e.date));
+  }, [expenses, user.id]);
+
+  // Separação de Despesas Operacionais vs Baixas / Prestações de Contas
+  const cashSettlements = useMemo(() => {
+    return myExpensesToday.filter(e => 
+      e.category === 'Prestação de Contas' || 
+      e.category === 'Baixa de Caixa' ||
+      e.description.toLowerCase().includes('baixa') ||
+      e.description.toLowerCase().includes('prestação') ||
+      e.description.toLowerCase().includes('prestacao')
+    );
+  }, [myExpensesToday]);
+
+  const operationalExpenses = useMemo(() => {
+    return myExpensesToday.filter(e => !cashSettlements.includes(e));
+  }, [myExpensesToday, cashSettlements]);
+
+  // Segmentação por Tipo de Pagamento
+  const paymentBreakdown = useMemo(() => {
+    let dinheiro = 0;
+    let pix = 0;
+    let debito = 0;
+    let credito = 0;
+    let countDinheiro = 0;
+    let countPix = 0;
+    let countDebito = 0;
+    let countCredito = 0;
+
+    myCompletedToday.forEach(o => {
+      const pm = (o.paymentMethod || '').toLowerCase();
+      const val = Number(o.total || 0);
+
+      if (pm.includes('dinheiro')) {
+        dinheiro += val;
+        countDinheiro++;
+      } else if (pm.includes('pix')) {
+        pix += val;
+        countPix++;
+      } else if (pm.includes('débito') || pm.includes('debito')) {
+        debito += val;
+        countDebito++;
+      } else {
+        // Cartão de Crédito ou padrão
+        credito += val;
+        countCredito++;
+      }
+    });
+
+    const totalFaturado = dinheiro + pix + debito + credito;
+    return {
+      dinheiro,
+      countDinheiro,
+      pix,
+      countPix,
+      debito,
+      countDebito,
+      credito,
+      countCredito,
+      totalFaturado
+    };
+  }, [myCompletedToday]);
+
+  // Caixa em Espécie (Dinheiro em Mãos)
+  const totalOpExpensesAmount = operationalExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  const totalSettledAmount = cashSettlements.reduce((acc, e) => acc + Number(e.amount || 0), 0);
+  // Saldo em dinheiro no bolso do entregador
+  const cashInHand = Math.max(0, paymentBreakdown.dinheiro - totalOpExpensesAmount - totalSettledAmount);
+
+  // Busca de Clientes para Nova Venda
+  const filteredCustomers = useMemo(() => {
+    if (!searchQuery.trim()) return allCustomers.slice(0, 5);
+    const q = searchQuery.toLowerCase();
+    return allCustomers.filter(c => 
+      (c.name || '').toLowerCase().includes(q) || 
+      (c.phone || '').includes(q) ||
+      c.addresses?.some(a => (a.street || '').toLowerCase().includes(q) || (a.neighborhood || '').toLowerCase().includes(q))
+    ).slice(0, 8);
+  }, [allCustomers, searchQuery]);
+
+  const cartTotal = useMemo(() => {
+    return Object.entries(cart).reduce((acc, [id, qty]) => {
+      const product = PRODUCTS.find(p => p.id === id);
+      return acc + (product?.price || 0) * (qty as number);
+    }, 0);
+  }, [cart]);
+
+  const handleCompleteOrder = (order: Order) => {
+    onUpdateOrder({ 
+      ...order, 
+      status: 'Concluído', 
+      completedAt: new Date().toISOString() 
+    });
+    showToast(`Pedido #${order.id} concluído com sucesso!`);
+  };
+
+  // Submissão de Nova Venda
+  const handleConfirmNewSale = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (cartTotal <= 0) {
+      alert('Selecione ao menos 1 item para a venda.');
+      return;
+    }
+
+    let customerName = 'Consumidor Final';
+    let customerPhone = '';
+    let customerId = 'walkin-' + Math.random().toString(36).substr(2, 7);
+    let address: Address = {
+      street: 'Venda Presencial / Rua',
+      number: 'S/N',
+      neighborhood: 'Atendimento Rápido',
+      city: 'Niterói',
+      state: 'RJ',
+      cep: '24000-000',
+      lat: user.location?.lat,
+      lng: user.location?.lng
+    };
+
+    if (saleCustomerType === 'existing' && selectedCustomer) {
+      customerId = selectedCustomer.id;
+      customerName = selectedCustomer.name || 'Cliente';
+      customerPhone = selectedCustomer.phone || '';
+      if (selectedCustomer.addresses && selectedCustomer.addresses.length > 0) {
+        address = selectedCustomer.addresses[0];
+      }
+    } else {
+      if (walkinName.trim()) customerName = walkinName.trim();
+      if (walkinPhone.trim()) customerPhone = walkinPhone.trim();
+      if (walkinStreet.trim()) {
+        address.street = walkinStreet.trim();
+      }
+      if (walkinNeighborhood.trim()) {
+        address.neighborhood = walkinNeighborhood.trim();
+      }
+    }
+
+    const newSaleOrder: Order = {
+      id: 'VENDA-' + Math.floor(1000 + Math.random() * 9000),
+      customerId,
+      customerName,
+      phone: customerPhone,
+      address,
+      items: Object.entries(cart)
+        .filter(([_, qty]) => (qty as number) > 0)
+        .map(([id, qty]) => ({
+          productId: id,
+          quantity: qty as number,
+          priceAtTime: PRODUCTS.find(p => p.id === id)?.price || 0
+        })),
       total: cartTotal,
-      paymentMethod: 'Dinheiro',
+      paymentMethod: selectedPaymentMethod,
       status: 'Concluído',
       deliveryPersonId: user.id,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      feedback: `[Venda Presencial pelo Entregador ${user.name}]`
     };
-    onAddOrder(newOrder);
+
+    onAddOrder(newSaleOrder);
     setIsAddingSale(false);
-    setCart({});
+    setCart({ p13: 1 });
     setSelectedCustomer(null);
+    setWalkinName('');
+    setWalkinPhone('');
+    setWalkinStreet('');
+    setWalkinNeighborhood('');
+    showToast(`✅ Venda de R$ ${cartTotal.toFixed(2)} cadastrada e concluída!`);
+  };
+
+  // Submissão de Despesa
+  const handleConfirmExpense = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountVal = parseFloat(expenseAmount.replace(',', '.'));
+    if (isNaN(amountVal) || amountVal <= 0) {
+      alert('Informe um valor válido para a despesa.');
+      return;
+    }
+    if (!expenseDesc.trim()) {
+      alert('Informe a descrição da despesa.');
+      return;
+    }
+
+    const newExpense: Expense = {
+      id: Math.random().toString(36).substr(2, 9),
+      description: `${expenseCategory}: ${expenseDesc.trim()}`,
+      amount: amountVal,
+      category: expenseCategory,
+      date: new Date().toISOString(),
+      userId: user.id
+    };
+
+    onAddExpense(newExpense);
+    setIsAddingExpense(false);
+    setExpenseDesc('');
+    setExpenseAmount('');
+    showToast(`💸 Despesa de R$ ${amountVal.toFixed(2)} lançada com sucesso!`);
+  };
+
+  // Submissão de Prestação de Contas (Baixa de Caixa)
+  const handleConfirmSettlement = (e: React.FormEvent) => {
+    e.preventDefault();
+    const amountVal = parseFloat(settlementAmount.replace(',', '.'));
+    if (isNaN(amountVal) || amountVal <= 0) {
+      alert('Informe um valor válido para a baixa.');
+      return;
+    }
+
+    const recipient = settlementRecipient.trim() || 'Gestor da Distribuidora';
+    const note = settlementNote.trim() ? ` (${settlementNote.trim()})` : '';
+
+    const settlementExpense: Expense = {
+      id: Math.random().toString(36).substr(2, 9),
+      description: `Baixa de Caixa repassada para ${recipient}${note}`,
+      amount: amountVal,
+      category: 'Prestação de Contas',
+      date: new Date().toISOString(),
+      userId: user.id
+    };
+
+    onAddExpense(settlementExpense);
+    setIsAddingSettlement(false);
+    setSettlementAmount('');
+    setSettlementRecipient('');
+    setSettlementNote('');
+    showToast(`🏦 Baixa de R$ ${amountVal.toFixed(2)} realizada com sucesso!`);
+  };
+
+  // Compartilhar Resumo no WhatsApp do Gestor
+  const handleShareSummaryWhatsapp = () => {
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+    const nomeDistribuidora = businessInfo?.name?.trim() || 'Gás Express';
+
+    let txt = `📊 *PRESTAÇÃO DE CONTAS / FECHAMENTO*\n`;
+    txt += `🏢 *${nomeDistribuidora}*\n`;
+    txt += `👤 Entregador: *${user.name}*\n`;
+    txt += `📅 Data: ${dataHoje}\n`;
+    txt += `------------------------------------\n`;
+    txt += `📦 *Entregas Concluídas:* ${myCompletedToday.length}\n`;
+    txt += `💰 *Faturamento Total:* R$ ${paymentBreakdown.totalFaturado.toFixed(2)}\n\n`;
+    
+    txt += `*RECEBIMENTO POR MODALIDADE:*\n`;
+    txt += `💵 Dinheiro: R$ ${paymentBreakdown.dinheiro.toFixed(2)} (${paymentBreakdown.countDinheiro} vendas)\n`;
+    txt += `⚡ Pix: R$ ${paymentBreakdown.pix.toFixed(2)} (${paymentBreakdown.countPix} vendas)\n`;
+    txt += `💳 Débito: R$ ${paymentBreakdown.debito.toFixed(2)} (${paymentBreakdown.countDebito} vendas)\n`;
+    txt += `💳 Crédito: R$ ${paymentBreakdown.credito.toFixed(2)} (${paymentBreakdown.countCredito} vendas)\n\n`;
+
+    txt += `*CAIXA EM DINHEIRO FÍSICO:*\n`;
+    txt += `(+) Entradas em Dinheiro: R$ ${paymentBreakdown.dinheiro.toFixed(2)}\n`;
+    txt += `(-) Despesas do Dia: R$ ${totalOpExpensesAmount.toFixed(2)}\n`;
+    txt += `(-) Baixas Já Entregues: R$ ${totalSettledAmount.toFixed(2)}\n`;
+    txt += `👉 *SALDO RESTANTE EM MÃOS:* R$ ${cashInHand.toFixed(2)}\n`;
+    txt += `------------------------------------\n`;
+    txt += `_Fechamento gerado via App Entregador_`;
+
+    window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank');
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 text-white pb-24">
-      <div className="p-6 max-w-md mx-auto">
-        <header className="flex items-center justify-between mb-8">
-          <h1 className="text-2xl font-black">Entregador</h1>
-          <div className="flex gap-2">
-            <button onClick={() => setActiveTab('deliveries')} className={`px-4 py-2 rounded-xl text-xs font-bold ${activeTab === 'deliveries' ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-400'}`}>Entregas</button>
-            <button onClick={() => setActiveTab('map')} className={`px-4 py-2 rounded-xl text-xs font-bold ${activeTab === 'map' ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-400'}`}>Mapa</button>
-            <button onClick={() => setActiveTab('finance')} className={`px-4 py-2 rounded-xl text-xs font-bold ${activeTab === 'finance' ? 'bg-yellow-400 text-slate-900' : 'bg-slate-800 text-slate-400'}`}>Financeiro</button>
-          </div>
-        </header>
+    <div className="h-full w-full flex flex-col bg-slate-950 text-white overflow-hidden relative select-none">
+      {/* Toast Informativo */}
+      <AnimatePresence>
+        {toastMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="absolute top-16 left-4 right-4 z-[999] max-w-sm mx-auto bg-yellow-400 text-slate-950 font-black px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs border border-yellow-300"
+          >
+            <CheckCircle2 className="w-5 h-5 shrink-0" />
+            <span>{toastMessage}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
+      {/* SEGUNDA LINHA: Apenas as abas navegáveis, sem segundo cabeçalho */}
+      <nav className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800/90 px-3 py-2 shrink-0 z-30 shadow-md">
+        <div className="grid grid-cols-3 gap-2 max-w-md mx-auto">
+          {/* Aba Entregas */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('deliveries')}
+            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'deliveries'
+                ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
+                : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <Package className="w-4 h-4 shrink-0" />
+            <span>Entregas</span>
+            {myDeliveries.length > 0 && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-black ${
+                activeTab === 'deliveries' ? 'bg-slate-900 text-yellow-400' : 'bg-yellow-400 text-slate-950'
+              }`}>
+                {myDeliveries.length}
+              </span>
+            )}
+          </button>
+
+          {/* Aba Mapa */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('map')}
+            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'map'
+                ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
+                : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <MapIcon className="w-4 h-4 shrink-0" />
+            <span>Mapa</span>
+            {myDeliveries.length > 0 && (
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+            )}
+          </button>
+
+          {/* Aba Financeiro */}
+          <button
+            type="button"
+            onClick={() => setActiveTab('finance')}
+            className={`flex items-center justify-center gap-2 py-2.5 px-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
+              activeTab === 'finance'
+                ? 'bg-yellow-400 text-slate-950 shadow-md shadow-yellow-400/20 scale-[1.02]'
+                : 'bg-slate-800/80 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <DollarSign className="w-4 h-4 shrink-0" />
+            <span>Financeiro</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* ÁREA PRINCIPAL: CONTEÚDO POR ABA */}
+      <div className="flex-1 overflow-hidden relative flex flex-col min-h-0">
         <AnimatePresence mode="wait">
+          {/* ========================================================= */}
+          {/* ABA 1: ENTREGAS                                          */}
+          {/* ========================================================= */}
           {activeTab === 'deliveries' && (
-            <motion.div key="deliveries" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
-              {/* Resumo do dia */}
+            <motion.div
+              key="deliveries"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 overflow-y-auto p-4 pb-28 space-y-4 max-w-md mx-auto w-full"
+            >
+              {/* Resumo rápido do dia */}
               <div className="grid grid-cols-2 gap-3">
-                <div className="bg-slate-800 p-4 rounded-2xl border border-slate-700">
-                  <p className="text-[10px] font-black text-slate-500 uppercase mb-1">Em Rota Agora</p>
-                  <p className="text-2xl font-black text-yellow-400">{myDeliveries.length}</p>
+                <div className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 shadow-sm flex items-center gap-3">
+                  <div className="p-2.5 bg-yellow-400/10 rounded-xl text-yellow-400">
+                    <Truck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Em Rota</p>
+                    <p className="text-xl font-black text-yellow-400">{myDeliveries.length}</p>
+                  </div>
                 </div>
-                <div className="bg-slate-800 p-4 rounded-2xl border border-slate-700">
-                  <p className="text-[10px] font-black text-slate-500 uppercase mb-1">Concluídas Hoje</p>
-                  <p className="text-2xl font-black text-green-400">{myCompletedToday.length}</p>
+
+                <div className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 shadow-sm flex items-center gap-3">
+                  <div className="p-2.5 bg-green-500/10 rounded-xl text-green-400">
+                    <CheckCircle2 className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Entregues Hoje</p>
+                    <p className="text-xl font-black text-green-400">{myCompletedToday.length}</p>
+                  </div>
                 </div>
               </div>
 
+              {/* Lista de Entregas */}
               {myDeliveries.length === 0 ? (
-                <div className="text-center py-20 opacity-30">
-                  <Truck className="w-16 h-16 mx-auto mb-4" />
-                  <p className="font-bold">Nenhuma entrega em rota.</p>
-                  <p className="text-sm mt-2 text-slate-500">Aguarde o gestor atribuir pedidos.</p>
+                <div className="text-center py-16 bg-slate-900/60 rounded-3xl border border-slate-800/80 p-6 mt-4">
+                  <div className="w-16 h-16 mx-auto mb-4 bg-slate-800 rounded-full flex items-center justify-center text-slate-500">
+                    <Truck className="w-8 h-8" />
+                  </div>
+                  <h3 className="text-base font-black text-slate-200 mb-1">Nenhuma entrega no momento</h3>
+                  <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                    Novos pedidos atribuídos pelo gestor aparecerão automaticamente aqui com alerta sonoro.
+                  </p>
+                  <button
+                    onClick={() => setIsAddingSale(true)}
+                    className="mt-5 inline-flex items-center gap-2 bg-yellow-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs shadow-md active:scale-95 transition-all"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Lançar Venda Direta</span>
+                  </button>
                 </div>
               ) : (
                 myDeliveries.map((o, idx) => (
-                  <div key={o.id} className="bg-slate-800 p-6 rounded-3xl border border-slate-700 shadow-xl">
-                    {/* Número de sequência */}
-                    <div className="flex items-center gap-3 mb-4">
-                      <div className="w-8 h-8 bg-yellow-400 text-slate-900 rounded-full flex items-center justify-center font-black text-sm shrink-0">
+                  <div 
+                    key={o.id} 
+                    className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-lg relative overflow-hidden"
+                  >
+                    {/* Faixa decorativa de status */}
+                    <div className={`absolute top-0 left-0 right-0 h-1.5 ${o.status === 'Em Rota' ? 'bg-blue-500' : 'bg-orange-500'}`} />
+
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="w-8 h-8 bg-yellow-400 text-slate-950 rounded-full flex items-center justify-center font-black text-xs shrink-0 shadow-sm">
                         {idx + 1}
                       </div>
-                      <span className="text-[10px] font-black bg-slate-700 text-slate-300 px-2 py-0.5 rounded uppercase">#{o.id}</span>
-                      <p className="text-lg font-black text-yellow-400 ml-auto">R$ {(o.total || 0).toFixed(2)}</p>
+                      <div>
+                        <span className="text-[10px] font-black bg-slate-800 text-slate-300 px-2 py-0.5 rounded uppercase">
+                          #{o.id}
+                        </span>
+                        <span className={`ml-2 text-[10px] font-black uppercase px-2 py-0.5 rounded ${
+                          o.status === 'Em Rota' ? 'bg-blue-950 text-blue-400 border border-blue-800' : 'bg-orange-950 text-orange-400 border border-orange-800'
+                        }`}>
+                          {o.status}
+                        </span>
+                      </div>
+                      <p className="text-base font-black text-yellow-400 ml-auto">
+                        R$ {(o.total || 0).toFixed(2)}
+                      </p>
                     </div>
 
-                    <h3 className="font-black text-lg mb-1">{o.customerName || 'Cliente'}</h3>
-                    <div className="text-slate-400 text-sm mb-1 flex items-start gap-2">
-                      <MapPin className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
-                      <span>{o.address?.street || 'Endereço não informado'}{o.address?.number ? `, ${o.address.number}` : ''}{o.address?.complement ? ` - ${o.address.complement}` : ''}</span>
+                    <div className="mb-3">
+                      <h4 className="font-black text-base text-white">{o.customerName || 'Cliente'}</h4>
+                      {o.phone && (
+                        <a 
+                          href={`tel:${o.phone.replace(/\D/g, '')}`} 
+                          className="text-xs text-yellow-400/90 font-bold flex items-center gap-1.5 mt-0.5 hover:underline"
+                        >
+                          <Phone className="w-3.5 h-3.5" />
+                          <span>{o.phone}</span>
+                        </a>
+                      )}
                     </div>
-                    {o.address?.reference && (
-                      <p className="text-[11px] text-slate-500 ml-6 mb-1">📍 {o.address.reference}</p>
-                    )}
-                    <p className="text-[11px] text-slate-500 ml-6 mb-2">{o.address?.neighborhood || ''} · {o.paymentMethod || 'Dinheiro'}</p>
 
+                    {/* Endereço */}
+                    <div className="bg-slate-950/70 p-3 rounded-2xl border border-slate-800/80 mb-3 space-y-1">
+                      <div className="text-slate-300 text-xs font-bold flex items-start gap-2">
+                        <MapPin className="w-4 h-4 text-yellow-400 shrink-0 mt-0.5" />
+                        <span>
+                          {o.address?.street || 'Endereço não informado'}
+                          {o.address?.number ? `, ${o.address.number}` : ''}
+                          {o.address?.complement ? ` - ${o.address.complement}` : ''}
+                        </span>
+                      </div>
+                      {o.address?.reference && (
+                        <p className="text-[11px] text-slate-400 ml-6">📍 Ref: {o.address.reference}</p>
+                      )}
+                      <div className="flex items-center gap-2 ml-6 text-[11px] text-slate-500 font-bold">
+                        <span>{o.address?.neighborhood || ''}</span>
+                        <span>•</span>
+                        <span className="text-yellow-400/80">Pagamento: {o.paymentMethod || 'Dinheiro'}</span>
+                      </div>
+                    </div>
+
+                    {/* Agendamento se houver */}
                     {o.isScheduled && (
-                      <div className="bg-purple-950/80 border border-purple-500/50 text-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold mb-3 flex items-center gap-1.5">
+                      <div className="bg-purple-950/70 border border-purple-800/60 text-purple-200 rounded-xl px-3 py-1.5 text-xs font-bold mb-3 flex items-center gap-1.5">
                         <Calendar className="w-3.5 h-3.5 text-purple-400" />
-                        <span>📅 Agendado: {o.scheduledDate || 'Amanhã'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod === 'noite' ? 'Noite' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
+                        <span>📅 Agendado: {o.scheduledDate || 'Hoje'} ({o.scheduledPeriodName || (o.scheduledPeriod === 'manha' ? 'Manhã' : o.scheduledPeriod === 'tarde' ? 'Tarde' : o.scheduledPeriod || 'Turno')}{o.scheduledTimeRange ? ` ${o.scheduledTimeRange}` : ''})</span>
                       </div>
                     )}
 
-                    <div className="grid grid-cols-2 gap-3 mb-3">
+                    {/* Botões de Ação */}
+                    <div className="grid grid-cols-2 gap-2.5 mb-2.5">
                       <a
-                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${o.address?.street || ''} ${o.address?.number || ''} ${o.address?.neighborhood || ''} ${o.address?.city || ''}`.trim())}`}
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                          `${o.address?.street || ''} ${o.address?.number || ''} ${o.address?.neighborhood || ''} ${o.address?.city || ''}`.trim()
+                        )}`}
                         target="_blank"
                         rel="noreferrer"
-                        className="bg-blue-600 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm"
+                        className="bg-blue-600 hover:bg-blue-500 active:scale-95 text-white py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md"
                       >
-                        <ExternalLink className="w-4 h-4" /> MAPS
+                        <ExternalLink className="w-4 h-4" />
+                        <span>MAPS / WAZE</span>
                       </a>
+
                       {o.status === 'Atribuído' ? (
-                        <button onClick={() => onUpdateOrder({ ...o, status: 'Em Rota' })} className="bg-orange-500 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm">
-                          <Check className="w-4 h-4" /> ACEITAR
+                        <button 
+                          onClick={() => onUpdateOrder({ ...o, status: 'Em Rota' })} 
+                          className="bg-orange-500 hover:bg-orange-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>ACEITAR ROTA</span>
                         </button>
                       ) : (
-                        <button onClick={() => handleComplete(o)} className="bg-green-600 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm">
-                          <Check className="w-4 h-4" /> ENTREGUE
+                        <button 
+                          onClick={() => handleCompleteOrder(o)} 
+                          className="bg-green-500 hover:bg-green-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>ENTREGUE</span>
                         </button>
                       )}
                     </div>
+
+                    {/* Botão de WhatsApp quando Em Rota */}
                     {o.status === 'Em Rota' && (
                       <button
                         onClick={() => {
                           const link = `${window.location.origin}?phone=${o.phone || ''}`;
                           const storeName = businessInfo?.name?.trim() || 'Gás Express';
-                          const message = `Olá ${o.customerName || 'Cliente'}, aqui é o entregador da ${storeName}! Estou saindo com seu pedido agora. Acompanhe minha localização em tempo real aqui: ${link}`;
+                          const message = `Olá ${o.customerName || 'Cliente'}, aqui é o entregador da ${storeName}! Estou a caminho do seu endereço agora. Acompanhe minha entrega ao vivo aqui: ${link}`;
                           window.open(`https://wa.me/55${(o.phone || '').replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
                         }}
-                        className="w-full bg-slate-700 p-4 rounded-2xl font-bold flex items-center justify-center gap-2 text-sm text-yellow-400"
+                        className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-yellow-400 py-2.5 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs border border-slate-700 transition-all"
                       >
-                        <MessageSquare className="w-4 h-4" /> NOTIFICAR CLIENTE (WHATSAPP)
+                        <MessageSquare className="w-4 h-4 text-green-400" />
+                        <span>AVISAR NO WHATSAPP</span>
                       </button>
                     )}
                   </div>
@@ -358,262 +772,856 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
             </motion.div>
           )}
 
+          {/* ========================================================= */}
+          {/* ABA 2: MAPA (TELA CHEIA, SEM DIV ENVOLVENTE)              */}
+          {/* ========================================================= */}
           {activeTab === 'map' && (
-            <motion.div key="map" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
-              <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-black text-lg flex items-center gap-2">
-                    <MapIcon className="text-yellow-400 w-5 h-5" /> Minha Rota
-                  </h3>
-                  <div className="flex items-center gap-2">
+            <motion.div
+              key="map"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 w-full h-full relative overflow-hidden flex flex-col"
+            >
+              {/* Barra Flutuante de Status GPS no topo do Mapa */}
+              <div className="absolute top-3 left-3 right-3 z-[500] max-w-md mx-auto pointer-events-auto">
+                <div className="bg-slate-900/90 backdrop-blur-md p-2.5 px-3 rounded-2xl border border-slate-800 shadow-xl flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${user.location ? 'bg-green-500 animate-pulse' : 'bg-yellow-400'}`}></span>
+                    <span className="text-[11px] font-bold text-slate-200 truncate">{gpsStatus}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
                     <button 
                       onClick={handleForceGps} 
-                      className="bg-slate-700 hover:bg-slate-600 text-yellow-400 px-2.5 py-1.5 rounded-xl text-[11px] font-bold transition-all"
+                      className="bg-slate-800 hover:bg-slate-700 text-yellow-400 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all border border-slate-700 active:scale-95"
                     >
-                      📡 Forçar GPS
+                      📡 GPS
                     </button>
                     <button 
                       onClick={handleSimulateStep} 
-                      className="bg-yellow-400 hover:bg-yellow-300 text-slate-900 px-3 py-1.5 rounded-xl text-[11px] font-black transition-all shadow-sm"
+                      className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all active:scale-95 shadow-sm"
                     >
-                      🛵 Simular Passo
+                      🛵 Andar
                     </button>
                   </div>
                 </div>
-
-                <div className="flex items-center gap-2 mb-3 bg-slate-900/60 px-3 py-2 rounded-xl border border-slate-700/50">
-                  <span className={`w-2.5 h-2.5 rounded-full ${user.location ? 'bg-green-500 animate-pulse' : 'bg-yellow-400'}`}></span>
-                  <span className="text-[11px] font-bold text-slate-300">{gpsStatus}</span>
-                </div>
-                
-                <div className="relative bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 z-0 isolate" style={{ height: '400px' }}>
-                  <MapContainer center={[user.location?.lat || -22.903, user.location?.lng || -43.112]} zoom={14} style={{ height: '100%', width: '100%' }}>
-                    <TileLayer
-                      url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    />
-                    
-                    {/* Marcador do Entregador */}
-                    <Marker 
-                      position={[user.location?.lat || -22.903, user.location?.lng || -43.112]}
-                      icon={L.divIcon({
-                        html: `<div style="background:#22c55e;color:white;width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:16px;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">🛵</div>`,
-                        iconSize: [34, 34],
-                        iconAnchor: [17, 17],
-                        className: ''
-                      })}
-                    >
-                      <Popup>
-                        <div className="font-bold text-slate-900">Você (Entregador)</div>
-                        <div className="text-xs text-slate-500">Localização em tempo real</div>
-                      </Popup>
-                    </Marker>
-
-                    {/* Marcadores dos Pedidos */}
-                    {myDeliveries.map((order, idx) => {
-                      // Usa a lat/lng do endereço geocodificado ou cai no centro de niterói para testar
-                      const lat = order.address?.lat || -22.903 + (idx * 0.001);
-                      const lng = order.address?.lng || -43.112 + (idx * 0.0005);
-                      const color = order.status === 'Em Rota' ? '#3b82f6' : '#f97316';
-                      
-                      return (
-                        <Marker
-                          key={order.id}
-                          position={[lat, lng]}
-                          icon={L.divIcon({
-                            html: `<div style="background:${color};color:white;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:12px;border:3px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">${idx + 1}</div>`,
-                            iconSize: [28, 28],
-                            className: ''
-                          })}
-                        >
-                          <Popup>
-                            <div className="text-slate-900">
-                              <div className="font-bold">Parada {idx + 1}</div>
-                              <div className="text-xs">{order.customerName || 'Cliente'}</div>
-                              <div className="text-xs text-slate-500">{order.address?.street || 'Endereço'}</div>
-                            </div>
-                          </Popup>
-                        </Marker>
-                      );
-                    })}
-                  </MapContainer>
-                </div>
               </div>
+
+              {/* Mapa em preenchimento 100% */}
+              <div className="w-full h-full flex-1 z-0">
+                <MapContainer 
+                  center={[user.location?.lat || -22.903, user.location?.lng || -43.112]} 
+                  zoom={14} 
+                  style={{ height: '100%', width: '100%' }}
+                  zoomControl={false}
+                >
+                  <TileLayer
+                    url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; OpenStreetMap'
+                  />
+                  
+                  {/* Marcador do Entregador */}
+                  <Marker 
+                    position={[user.location?.lat || -22.903, user.location?.lng || -43.112]}
+                    icon={L.divIcon({
+                      html: `<div style="background:#22c55e;color:white;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;border:3px solid white;box-shadow:0 3px 10px rgba(0,0,0,0.4);">🛵</div>`,
+                      iconSize: [36, 36],
+                      iconAnchor: [18, 18],
+                      className: ''
+                    })}
+                  >
+                    <Popup>
+                      <div className="font-bold text-slate-900 text-xs">Você (Entregador)</div>
+                      <div className="text-[10px] text-slate-500">Localização em tempo real</div>
+                    </Popup>
+                  </Marker>
+
+                  {/* Marcadores dos Pedidos Ativos */}
+                  {myDeliveries.map((order, idx) => {
+                    const lat = order.address?.lat || -22.903 + (idx * 0.0012);
+                    const lng = order.address?.lng || -43.112 + (idx * 0.0008);
+                    const color = order.status === 'Em Rota' ? '#3b82f6' : '#f97316';
+                    
+                    return (
+                      <Marker
+                        key={order.id}
+                        position={[lat, lng]}
+                        icon={L.divIcon({
+                          html: `<div style="background:${color};color:white;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:13px;border:3px solid white;box-shadow:0 3px 10px rgba(0,0,0,0.4);">${idx + 1}</div>`,
+                          iconSize: [30, 30],
+                          className: ''
+                        })}
+                      >
+                        <Popup>
+                          <div className="text-slate-900 p-1">
+                            <div className="font-black text-xs">Parada #{idx + 1} • {order.customerName}</div>
+                            <div className="text-[11px] text-slate-600">{order.address?.street}, {order.address?.number}</div>
+                            <div className="text-[10px] font-bold text-green-700 mt-1">R$ {order.total.toFixed(2)} ({order.paymentMethod})</div>
+                          </div>
+                        </Popup>
+                      </Marker>
+                    );
+                  })}
+                </MapContainer>
+              </div>
+
+              {/* Card Flutuante da Próxima Parada no rodapé do mapa */}
+              {nextActiveDelivery && (
+                <div className="absolute bottom-20 left-3 right-3 z-[500] max-w-md mx-auto pointer-events-auto">
+                  <div className="bg-slate-900/95 backdrop-blur-md p-3.5 rounded-2xl border border-slate-700 shadow-2xl">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-black bg-yellow-400 text-slate-950 px-2 py-0.5 rounded uppercase">
+                        Próxima Parada • #{nextActiveDelivery.id}
+                      </span>
+                      <span className="text-xs font-black text-yellow-400">
+                        R$ {nextActiveDelivery.total.toFixed(2)}
+                      </span>
+                    </div>
+                    <p className="font-black text-sm text-white truncate">{nextActiveDelivery.customerName}</p>
+                    <p className="text-xs text-slate-300 truncate mb-2.5">
+                      📍 {nextActiveDelivery.address?.street}, {nextActiveDelivery.address?.number} ({nextActiveDelivery.address?.neighborhood})
+                    </p>
+                    <div className="grid grid-cols-2 gap-2">
+                      <a
+                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                          `${nextActiveDelivery.address?.street || ''} ${nextActiveDelivery.address?.number || ''} ${nextActiveDelivery.address?.neighborhood || ''}`.trim()
+                        )}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="bg-blue-600 hover:bg-blue-500 py-2 rounded-xl text-center font-black text-xs flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Abrir Rota</span>
+                      </a>
+                      <button
+                        onClick={() => handleCompleteOrder(nextActiveDelivery)}
+                        className="bg-green-500 hover:bg-green-400 text-slate-950 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        <span>Entregue</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </motion.div>
           )}
 
+          {/* ========================================================= */}
+          {/* ABA 3: FINANCEIRO & PRESTAÇÃO DE CONTAS                    */}
+          {/* ========================================================= */}
           {activeTab === 'finance' && (
-            <motion.div key="finance" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="space-y-4">
-              {/* Métricas do dia */}
-              <div className="bg-slate-800 p-6 rounded-3xl border border-slate-700 space-y-4">
-                <p className="text-xs font-black text-slate-400 uppercase tracking-wider">Resumo do Dia</p>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Entregas</p>
-                    <p className="text-2xl font-black text-white">{myCompletedToday.length}</p>
+            <motion.div
+              key="finance"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex-1 overflow-y-auto p-4 pb-28 space-y-4 max-w-md mx-auto w-full"
+            >
+              {/* Botão de Destaque: NOVA VENDA */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingSale(true)}
+                  className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-slate-950 p-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-yellow-400/20 transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>NOVA VENDA</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAddingExpense(true)}
+                  className="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 p-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  <TrendingDown className="w-4 h-4 text-red-400" />
+                  <span>LANÇAR DESPESA</span>
+                </button>
+              </div>
+
+              {/* Card Principal: Caixa em Dinheiro e Prestação de Contas */}
+              <div className="bg-gradient-to-br from-slate-900 to-slate-900/90 p-5 rounded-3xl border border-slate-800 shadow-xl relative overflow-hidden">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-2 bg-yellow-400/10 rounded-xl text-yellow-400">
+                      <Wallet className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Caixa do Entregador</p>
+                      <h3 className="font-black text-sm text-white">Dinheiro Físico em Mãos</h3>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Faturado</p>
-                    <p className="text-2xl font-black text-green-400">
-                      R$ {myCompletedToday.reduce((acc, o) => acc + o.total, 0).toFixed(2)}
+                  <span className="text-[10px] font-black bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full border border-green-500/30">
+                    Hoje
+                  </span>
+                </div>
+
+                <div className="mb-4 bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80">
+                  <p className="text-xs text-slate-400 font-bold mb-1">Saldo a Prestar Contas:</p>
+                  <p className="text-3xl font-black text-yellow-400">
+                    R$ {cashInHand.toFixed(2)}
+                  </p>
+                  <div className="mt-3 pt-3 border-t border-slate-800/60 grid grid-cols-3 gap-2 text-[10px] text-slate-400">
+                    <div>
+                      <span className="block text-slate-500 font-bold">Vendas Dinheiro:</span>
+                      <span className="font-black text-green-400">+ R$ {paymentBreakdown.dinheiro.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500 font-bold">Despesas Pagas:</span>
+                      <span className="font-black text-red-400">- R$ {totalOpExpensesAmount.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="block text-slate-500 font-bold">Baixas Feitas:</span>
+                      <span className="font-black text-blue-400">- R$ {totalSettledAmount.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Botão de Dar Baixa em Dinheiro */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSettlementAmount(cashInHand > 0 ? cashInHand.toFixed(2) : '');
+                    setIsAddingSettlement(true);
+                  }}
+                  className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-yellow-400 border border-yellow-400/40 py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
+                >
+                  <Banknote className="w-4 h-4" />
+                  <span>DAR BAIXA NO CAIXA (REPASSAR DINHEIRO)</span>
+                </button>
+              </div>
+
+              {/* Resumo do Dia por Forma de Pagamento */}
+              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Receipt className="w-4 h-4 text-yellow-400" />
+                    <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider">
+                      Vendas do Dia por Pagamento
+                    </h3>
+                  </div>
+                  <span className="text-xs font-black text-white">
+                    {myCompletedToday.length} pedidos
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* Dinheiro */}
+                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center justify-between text-slate-400 mb-1">
+                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
+                        💵 Dinheiro
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        {paymentBreakdown.countDinheiro}x
+                      </span>
+                    </div>
+                    <p className="text-base font-black text-green-400">
+                      R$ {paymentBreakdown.dinheiro.toFixed(2)}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Despesas</p>
-                    <p className="text-2xl font-black text-red-400">
-                      - R$ {todayExpenses.reduce((acc, e) => acc + e.amount, 0).toFixed(2)}
+
+                  {/* Pix */}
+                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center justify-between text-slate-400 mb-1">
+                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
+                        ⚡ Pix
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        {paymentBreakdown.countPix}x
+                      </span>
+                    </div>
+                    <p className="text-base font-black text-teal-400">
+                      R$ {paymentBreakdown.pix.toFixed(2)}
                     </p>
                   </div>
-                  <div>
-                    <p className="text-[10px] text-slate-500 uppercase font-bold mb-1">Resultado</p>
-                    <p className="text-2xl font-black text-yellow-400">
-                      R$ {(myCompletedToday.reduce((acc, o) => acc + o.total, 0) - todayExpenses.reduce((acc, e) => acc + e.amount, 0)).toFixed(2)}
+
+                  {/* Cartão de Débito */}
+                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center justify-between text-slate-400 mb-1">
+                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
+                        💳 Débito
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        {paymentBreakdown.countDebito}x
+                      </span>
+                    </div>
+                    <p className="text-base font-black text-blue-400">
+                      R$ {paymentBreakdown.debito.toFixed(2)}
+                    </p>
+                  </div>
+
+                  {/* Cartão de Crédito */}
+                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
+                    <div className="flex items-center justify-between text-slate-400 mb-1">
+                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
+                        💳 Crédito
+                      </span>
+                      <span className="text-[10px] font-bold text-slate-500">
+                        {paymentBreakdown.countCredito}x
+                      </span>
+                    </div>
+                    <p className="text-base font-black text-purple-400">
+                      R$ {paymentBreakdown.credito.toFixed(2)}
                     </p>
                   </div>
                 </div>
+
+                {/* Total Faturado Geral */}
+                <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-800 flex justify-between items-center">
+                  <span className="text-xs font-black text-slate-400">TOTAL FATURADO HOJE:</span>
+                  <span className="text-lg font-black text-yellow-400">
+                    R$ {paymentBreakdown.totalFaturado.toFixed(2)}
+                  </span>
+                </div>
               </div>
 
-              {/* Despesas do dia */}
-              <div>
-                <p className="text-xs font-black text-slate-400 uppercase mb-3">Despesas Lançadas Hoje</p>
+              {/* Movimentações do Dia (Despesas e Baixas) */}
+              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <History className="w-4 h-4 text-yellow-400" />
+                    Saídas & Baixas Hoje
+                  </h3>
+                  <span className="text-[10px] font-bold text-slate-400">
+                    Total: R$ {(totalOpExpensesAmount + totalSettledAmount).toFixed(2)}
+                  </span>
+                </div>
+
                 <div className="space-y-2">
-                  {todayExpenses.length === 0 ? (
-                    <p className="text-slate-500 text-sm text-center py-4">Nenhuma despesa hoje.</p>
+                  {myExpensesToday.length === 0 ? (
+                    <p className="text-xs text-slate-500 text-center py-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
+                      Nenhuma saída ou baixa registrada hoje.
+                    </p>
                   ) : (
-                    todayExpenses.map(e => (
-                      <div key={e.id} className="bg-slate-800/50 p-4 rounded-2xl flex justify-between items-center border border-slate-800">
-                        <div>
-                          <p className="font-bold text-sm">{e.description}</p>
-                          <p className="text-[10px] text-slate-500">{new Date(e.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</p>
+                    myExpensesToday.map(e => {
+                      const isSettlement = cashSettlements.includes(e);
+                      return (
+                        <div 
+                          key={e.id} 
+                          className="bg-slate-950 p-3 rounded-2xl flex justify-between items-center border border-slate-800/80"
+                        >
+                          <div className="min-w-0 pr-2">
+                            <p className="font-bold text-xs text-slate-200 truncate">{e.description}</p>
+                            <p className="text-[10px] text-slate-500">
+                              {new Date(e.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {e.category}
+                            </p>
+                          </div>
+                          <p className={`font-black text-xs shrink-0 ${isSettlement ? 'text-blue-400' : 'text-red-400'}`}>
+                            - R$ {Number(e.amount).toFixed(2)}
+                          </p>
                         </div>
-                        <p className="font-black text-red-400">- R$ {e.amount.toFixed(2)}</p>
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </div>
 
-              <button onClick={() => setIsAddingExpense(true)} className="w-full bg-slate-800 border border-slate-700 p-4 rounded-2xl font-bold text-slate-400 hover:text-white transition-all">
-                + LANÇAR DESPESA
-              </button>
+              {/* Fechamento do Fim do Dia / Compartilhamento */}
+              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <Share2 className="w-4 h-4 text-green-400" />
+                    Fechamento do Fim do Dia
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Envie o relatório consolidado com resumo de vendas, despesas, baixas e saldo em dinheiro para a gerência.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleShareSummaryWhatsapp}
+                  className="w-full bg-green-600 hover:bg-green-500 active:scale-95 text-white py-3.5 px-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-green-600/20 transition-all cursor-pointer"
+                >
+                  <MessageSquare className="w-4 h-4" />
+                  <span>COMPARTILHAR FECHAMENTO NO WHATSAPP</span>
+                </button>
+              </div>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Floating Button */}
-      <button 
-        onClick={() => setIsAddingSale(true)}
-        className="fixed bottom-6 right-6 bg-yellow-400 text-slate-900 w-16 h-16 rounded-full shadow-2xl flex items-center justify-center z-50 active:scale-90 transition-all"
-      >
-        <Plus className="w-8 h-8" />
-      </button>
+      {/* ========================================================= */}
+      {/* BOTÃO FLUTUANTE "+" COM SPEED DIAL (2 OPÇÕES PRINCIPAIS)    */}
+      {/* ========================================================= */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 pointer-events-auto">
+        <AnimatePresence>
+          {isFabMenuOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: 15, scale: 0.9 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 15, scale: 0.9 }}
+              className="flex flex-col gap-2.5 items-end mb-1"
+            >
+              {/* Opção 1: Nova Venda */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFabMenuOpen(false);
+                  setIsAddingSale(true);
+                }}
+                className="flex items-center gap-3 bg-yellow-400 hover:bg-yellow-300 text-slate-950 px-4 py-3 rounded-2xl shadow-2xl font-black text-xs active:scale-95 transition-all cursor-pointer border border-yellow-300"
+              >
+                <span>🛒 Nova Venda</span>
+              </button>
 
-      {/* New Sale Modal */}
+              {/* Opção 2: Lançar Despesa */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFabMenuOpen(false);
+                  setIsAddingExpense(true);
+                }}
+                className="flex items-center gap-3 bg-slate-900 hover:bg-slate-800 text-red-400 border border-slate-700 px-4 py-3 rounded-2xl shadow-2xl font-black text-xs active:scale-95 transition-all cursor-pointer"
+              >
+                <span>💸 Lançar Despesa</span>
+              </button>
+
+              {/* Opção 3: Prestação de Contas */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsFabMenuOpen(false);
+                  setSettlementAmount(cashInHand > 0 ? cashInHand.toFixed(2) : '');
+                  setIsAddingSettlement(true);
+                }}
+                className="flex items-center gap-3 bg-slate-900 hover:bg-slate-800 text-blue-400 border border-slate-700 px-4 py-3 rounded-2xl shadow-2xl font-black text-xs active:scale-95 transition-all cursor-pointer"
+              >
+                <span>🏦 Dar Baixa no Caixa</span>
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* Botão circular principal */}
+        <button
+          type="button"
+          onClick={() => setIsFabMenuOpen(!isFabMenuOpen)}
+          className={`w-14 h-14 rounded-full shadow-2xl flex items-center justify-center transition-all cursor-pointer active:scale-90 ${
+            isFabMenuOpen 
+              ? 'bg-slate-800 text-white rotate-45 border border-slate-600' 
+              : 'bg-yellow-400 text-slate-950 shadow-yellow-400/30'
+          }`}
+          title="Ações rápidas"
+        >
+          <Plus className="w-7 h-7" />
+        </button>
+      </div>
+
+      {/* Backdrop para fechar o Speed Dial ao tocar fora */}
+      {isFabMenuOpen && (
+        <div 
+          onClick={() => setIsFabMenuOpen(false)}
+          className="fixed inset-0 bg-slate-950/40 backdrop-blur-[2px] z-40"
+        />
+      )}
+
+      {/* ========================================================= */}
+      {/* MODAL 1: NOVA VENDA (CORRIGIDO E CONECTADO AO BANCO)       */}
+      {/* ========================================================= */}
       <AnimatePresence>
         {isAddingSale && (
-          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[60] p-6 overflow-y-auto">
-            <div className="max-w-md mx-auto">
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-black">Nova Venda</h2>
-                <button onClick={() => setIsAddingSale(false)}><X className="w-8 h-8" /></button>
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[60] p-4 flex flex-col justify-end sm:justify-center overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 30 }}
+              className="bg-slate-900 w-full max-w-md mx-auto rounded-3xl p-5 border border-slate-800 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+            >
+              <div className="flex justify-between items-center pb-3 border-b border-slate-800 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-yellow-400/10 rounded-xl text-yellow-400">
+                    <Package className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-black text-white">Nova Venda</h2>
+                    <p className="text-[10px] text-slate-400">Venda direta / consumidor no local</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsAddingSale(false)}
+                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
 
-              {!selectedCustomer ? (
-                <div className="space-y-6">
-                  <div className="relative">
-                    <Search className="absolute left-4 top-4 text-slate-500 w-5 h-5" />
+              <form onSubmit={handleConfirmNewSale} className="flex-1 overflow-y-auto py-3 space-y-4 pr-1">
+                {/* Tipo de Cliente: Avulso vs Cadastrado */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">
+                    Destinatário
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setSaleCustomerType('walkin')}
+                      className={`py-2 rounded-xl text-xs font-black transition-all ${
+                        saleCustomerType === 'walkin'
+                          ? 'bg-yellow-400 text-slate-950 shadow'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      Consumidor Rua
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSaleCustomerType('existing')}
+                      className={`py-2 rounded-xl text-xs font-black transition-all ${
+                        saleCustomerType === 'existing'
+                          ? 'bg-yellow-400 text-slate-950 shadow'
+                          : 'text-slate-400'
+                      }`}
+                    >
+                      Buscar Cliente
+                    </button>
+                  </div>
+                </div>
+
+                {saleCustomerType === 'existing' ? (
+                  <div className="space-y-2">
+                    {!selectedCustomer ? (
+                      <>
+                        <div className="relative">
+                          <Search className="absolute left-3.5 top-3.5 text-slate-500 w-4 h-4" />
+                          <input 
+                            type="text" 
+                            placeholder="Buscar por nome, telefone ou rua..."
+                            className="w-full pl-10 pr-3 py-2.5 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-yellow-400 outline-none"
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                          />
+                        </div>
+                        <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                          {filteredCustomers.map(c => (
+                            <button 
+                              key={c.id} 
+                              type="button"
+                              onClick={() => setSelectedCustomer(c)} 
+                              className="w-full p-2.5 bg-slate-950 hover:bg-slate-800 rounded-xl text-left border border-slate-800/80 hover:border-yellow-400 transition-all flex justify-between items-center"
+                            >
+                              <div className="min-w-0 pr-2">
+                                <p className="font-bold text-xs text-white truncate">{c.name}</p>
+                                <p className="text-[10px] text-slate-400 truncate">
+                                  {c.addresses?.[0]?.street ? `${c.addresses[0].street}, ${c.addresses[0].number || ''}` : (c.phone || 'Sem endereço cadastrado')}
+                                </p>
+                              </div>
+                              <span className="text-[10px] font-black text-yellow-400 shrink-0">SELECIONAR</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : (
+                      <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex justify-between items-center">
+                        <div className="min-w-0 pr-2">
+                          <span className="text-[10px] font-black text-slate-500 uppercase block">Cliente Selecionado</span>
+                          <p className="font-black text-xs text-white truncate">{selectedCustomer.name}</p>
+                          <p className="text-[10px] text-slate-400 truncate">
+                            {selectedCustomer.addresses?.[0]?.street || selectedCustomer.phone || 'Endereço no local'}
+                          </p>
+                        </div>
+                        <button 
+                          type="button" 
+                          onClick={() => setSelectedCustomer(null)} 
+                          className="text-xs font-black text-yellow-400 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700"
+                        >
+                          TROCAR
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2 bg-slate-950 p-3 rounded-2xl border border-slate-800">
                     <input 
                       type="text" 
-                      placeholder="Buscar cliente ou endereço..."
-                      className="w-full pl-12 pr-4 py-4 bg-slate-800 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Nome do cliente (opcional)"
+                      className="w-full p-2.5 bg-slate-900 rounded-xl text-xs text-white border border-slate-800 outline-none"
+                      value={walkinName}
+                      onChange={(e) => setWalkinName(e.target.value)}
                     />
+                    <div className="grid grid-cols-2 gap-2">
+                      <input 
+                        type="tel" 
+                        placeholder="WhatsApp (opcional)"
+                        className="w-full p-2.5 bg-slate-900 rounded-xl text-xs text-white border border-slate-800 outline-none"
+                        value={walkinPhone}
+                        onChange={(e) => setWalkinPhone(e.target.value)}
+                      />
+                      <input 
+                        type="text" 
+                        placeholder="Bairro (opcional)"
+                        className="w-full p-2.5 bg-slate-900 rounded-xl text-xs text-white border border-slate-800 outline-none"
+                        value={walkinNeighborhood}
+                        onChange={(e) => setWalkinNeighborhood(e.target.value)}
+                      />
+                    </div>
                   </div>
-                  <div className="space-y-3">
-                    {filteredCustomers.map(c => (
-                      <button key={c.id} onClick={() => setSelectedCustomer(c)} className="w-full p-4 bg-slate-800 rounded-2xl text-left border border-slate-700 hover:border-yellow-400 transition-all">
-                        <p className="font-bold">{c.name}</p>
-                        <p className="text-xs text-slate-500">{c.addresses?.[0]?.street}, {c.addresses?.[0]?.number}</p>
+                )}
+
+                {/* Itens do Catálogo */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">
+                    Itens da Venda
+                  </label>
+                  <div className="space-y-2">
+                    {PRODUCTS.map(p => {
+                      const qty = cart[p.id] || 0;
+                      return (
+                        <div key={p.id} className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <img src={p.image} className="w-10 h-10 rounded-xl object-cover shrink-0" alt={p.name} />
+                            <div>
+                              <p className="font-bold text-xs text-white">{p.name}</p>
+                              <p className="font-black text-xs text-yellow-400">R$ {p.price.toFixed(2)}</p>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button 
+                              type="button"
+                              onClick={() => setCart(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] || 0) - 1) }))}
+                              className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-xs text-slate-300"
+                            >
+                              <Minus className="w-3.5 h-3.5" />
+                            </button>
+                            <span className="font-black text-xs w-5 text-center">{qty}</span>
+                            <button 
+                              type="button"
+                              onClick={() => setCart(prev => ({ ...prev, [p.id]: (prev[p.id] || 0) + 1 }))}
+                              className="w-7 h-7 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center font-black text-xs"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Forma de Pagamento */}
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">
+                    Forma de Pagamento
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['Dinheiro', 'Pix', 'Cartão de Débito', 'Cartão de Crédito'] as const).map(pm => (
+                      <button
+                        key={pm}
+                        type="button"
+                        onClick={() => setSelectedPaymentMethod(pm)}
+                        className={`p-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 border ${
+                          selectedPaymentMethod === pm
+                            ? 'bg-yellow-400 text-slate-950 border-yellow-300 shadow'
+                            : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
+                        }`}
+                      >
+                        <span>{pm === 'Dinheiro' ? '💵' : pm === 'Pix' ? '⚡' : '💳'}</span>
+                        <span>{pm}</span>
                       </button>
                     ))}
                   </div>
                 </div>
-              ) : (
-                <div className="space-y-6">
-                  <div className="bg-slate-800 p-4 rounded-2xl flex justify-between items-center">
-                    <div>
-                      <p className="text-xs font-bold text-slate-500 uppercase">Cliente</p>
-                      <p className="font-bold">{selectedCustomer.name}</p>
-                    </div>
-                    <button onClick={() => setSelectedCustomer(null)} className="text-xs font-black text-yellow-400">TROCAR</button>
+
+                {/* Total e Confirmação */}
+                <div className="pt-2">
+                  <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex justify-between items-center mb-3">
+                    <span className="text-xs font-black text-slate-400">TOTAL A RECEBER:</span>
+                    <span className="text-2xl font-black text-yellow-400">R$ {cartTotal.toFixed(2)}</span>
                   </div>
 
-                  <div className="space-y-3">
-                    {PRODUCTS.map(p => (
-                      <div key={p.id} className="bg-slate-800 p-4 rounded-2xl flex items-center gap-4">
-                        <img src={p.image} className="w-12 h-12 rounded-xl object-cover" />
-                        <div className="flex-1">
-                          <p className="font-bold text-sm">{p.name}</p>
-                          <p className="font-black text-yellow-400">R$ {p.price.toFixed(2)}</p>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => setCart(prev => ({...prev, [p.id]: Math.max(0, (prev[p.id] || 0) - 1)}))} className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center"><Minus className="w-4 h-4" /></button>
-                          <span className="font-bold">{cart[p.id] || 0}</span>
-                          <button onClick={() => setCart(prev => ({...prev, [p.id]: (prev[p.id] || 0) + 1}))} className="w-8 h-8 rounded-full bg-yellow-400 text-slate-900 flex items-center justify-center"><Plus className="w-4 h-4" /></button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="bg-slate-800 p-6 rounded-3xl">
-                    <div className="flex justify-between items-center mb-6">
-                      <span className="font-bold">TOTAL</span>
-                      <span className="text-2xl font-black text-yellow-400">R$ {cartTotal.toFixed(2)}</span>
-                    </div>
-                    <button 
-                      onClick={handleNewSale}
-                      disabled={cartTotal === 0}
-                      className="w-full bg-yellow-400 text-slate-900 font-black py-4 rounded-2xl disabled:opacity-50"
-                    >
-                      CONFIRMAR VENDA
-                    </button>
-                  </div>
+                  <button
+                    type="submit"
+                    disabled={cartTotal <= 0}
+                    className="w-full bg-yellow-400 hover:bg-yellow-300 disabled:opacity-40 text-slate-950 font-black py-3.5 rounded-2xl shadow-xl shadow-yellow-400/20 text-xs transition-all cursor-pointer"
+                  >
+                    CONFIRMAR E REGISTRAR VENDA
+                  </button>
                 </div>
-              )}
-            </div>
+              </form>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Expense Modal */}
+      {/* ========================================================= */}
+      {/* MODAL 2: LANÇAR DESPESA                                    */}
+      {/* ========================================================= */}
       <AnimatePresence>
         {isAddingExpense && (
-          <div className="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-[60] p-6 flex items-center justify-center">
-            <div className="bg-slate-800 w-full max-w-md rounded-3xl p-8 shadow-2xl">
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-2xl font-black">Lançar Despesa</h2>
-                <button onClick={() => setIsAddingExpense(false)}><X className="w-8 h-8" /></button>
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[60] p-4 flex items-center justify-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 w-full max-w-md rounded-3xl p-6 border border-slate-800 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-red-500/10 rounded-xl text-red-400">
+                    <TrendingDown className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-white">Lançar Despesa</h2>
+                    <p className="text-[10px] text-slate-400">Saídas do caixa (gasolina, almoço, consertos)</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsAddingExpense(false)}
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                const formData = new FormData(e.currentTarget);
-                onAddExpense({
-                  id: Math.random().toString(36).substr(2, 9),
-                  description: formData.get('desc') as string,
-                  amount: parseFloat(formData.get('amount') as string),
-                  date: new Date().toISOString(),
-                  category: 'Geral',
-                  userId: user.id
-                });
-                setIsAddingExpense(false);
-              }} className="space-y-4">
-                <input required name="desc" placeholder="Descrição (ex: Combustível)" className="w-full p-4 bg-slate-900 rounded-2xl outline-none focus:ring-2 focus:ring-yellow-400" />
-                <input required name="amount" type="number" step="0.01" placeholder="Valor (R$)" className="w-full p-4 bg-slate-900 rounded-2xl outline-none focus:ring-2 focus:ring-yellow-400" />
-                <button type="submit" className="w-full bg-yellow-400 text-slate-900 font-black py-4 rounded-2xl">SALVAR DESPESA</button>
+
+              <form onSubmit={handleConfirmExpense} className="space-y-3.5">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Categoria</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['Combustível', 'Alimentação', 'Manutenção Moto', 'Outros'] as const).map(cat => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setExpenseCategory(cat)}
+                        className={`p-2 rounded-xl text-xs font-bold transition-all border ${
+                          expenseCategory === cat
+                            ? 'bg-red-500/20 text-red-400 border-red-500/40'
+                            : 'bg-slate-950 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        {cat}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Descrição</label>
+                  <input
+                    required
+                    type="text"
+                    placeholder="Ex: Abastecimento de R$ 30 no Posto Shell"
+                    className="w-full p-3 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-red-400 outline-none"
+                    value={expenseDesc}
+                    onChange={(e) => setExpenseDesc(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Valor (R$)</label>
+                  <input
+                    required
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    className="w-full p-3 bg-slate-950 rounded-xl text-sm font-black text-yellow-400 border border-slate-800 focus:border-red-400 outline-none"
+                    value={expenseAmount}
+                    onChange={(e) => setExpenseAmount(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-red-600 hover:bg-red-500 active:scale-95 text-white font-black py-3.5 rounded-2xl shadow-lg shadow-red-600/20 text-xs transition-all cursor-pointer mt-2"
+                >
+                  SALVAR DESPESA
+                </button>
               </form>
-            </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================= */}
+      {/* MODAL 3: PRESTAÇÃO DE CONTAS / DAR BAIXA NO CAIXA          */}
+      {/* ========================================================= */}
+      <AnimatePresence>
+        {isAddingSettlement && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[60] p-4 flex items-center justify-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 w-full max-w-md rounded-3xl p-6 border border-slate-800 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-blue-500/10 rounded-xl text-blue-400">
+                    <Banknote className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h2 className="text-base font-black text-white">Baixa de Caixa</h2>
+                    <p className="text-[10px] text-slate-400">Repassar dinheiro físico para o caixa da loja</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setIsAddingSettlement(false)}
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleConfirmSettlement} className="space-y-3.5">
+                <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex justify-between items-center">
+                  <span className="text-xs text-slate-400 font-bold">Saldo Atual em Mãos:</span>
+                  <span className="text-base font-black text-yellow-400">R$ {cashInHand.toFixed(2)}</span>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase">Valor a Baixar (R$)</label>
+                    {cashInHand > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSettlementAmount(cashInHand.toFixed(2))}
+                        className="text-[10px] font-black text-yellow-400 hover:underline"
+                      >
+                        Baixar Tudo
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    required
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    className="w-full p-3 bg-slate-950 rounded-xl text-sm font-black text-yellow-400 border border-slate-800 focus:border-blue-400 outline-none"
+                    value={settlementAmount}
+                    onChange={(e) => setSettlementAmount(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Entregue a quem?</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Carlos (Gestor), Caixa da Distribuidora"
+                    className="w-full p-3 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-blue-400 outline-none"
+                    value={settlementRecipient}
+                    onChange={(e) => setSettlementRecipient(e.target.value)}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Observações (opcional)</label>
+                  <input
+                    type="text"
+                    placeholder="Ex: Acerto de contas do turno da manhã"
+                    className="w-full p-3 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-blue-400 outline-none"
+                    value={settlementNote}
+                    onChange={(e) => setSettlementNote(e.target.value)}
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  className="w-full bg-blue-600 hover:bg-blue-500 active:scale-95 text-white font-black py-3.5 rounded-2xl shadow-lg shadow-blue-600/20 text-xs transition-all cursor-pointer mt-2"
+                >
+                  CONFIRMAR BAIXA NO CAIXA
+                </button>
+              </form>
+            </motion.div>
           </div>
         )}
       </AnimatePresence>

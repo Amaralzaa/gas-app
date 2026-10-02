@@ -44,6 +44,8 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   businessInfo,
   onSave
 }) => {
+  const isDirtyRef = React.useRef(false);
+  const lastUpdatedRef = React.useRef(businessInfo?.updatedAt);
   const [form, setForm] = useState<BusinessInfo>(() => ({
     ...businessInfo,
     deliveryPeriods: (businessInfo.deliveryPeriods && businessInfo.deliveryPeriods.length > 0)
@@ -55,7 +57,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   const [savedSuccess, setSavedSuccess] = useState(false);
 
   useEffect(() => {
-    if (businessInfo) {
+    if (businessInfo && !isDirtyRef.current) {
       setForm(prev => ({
         ...businessInfo,
         name: businessInfo.name || prev.name || '',
@@ -65,12 +67,14 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
           ? businessInfo.deliveryPeriods
           : (prev.deliveryPeriods && prev.deliveryPeriods.length > 0 ? prev.deliveryPeriods : DEFAULT_DELIVERY_PERIODS)
       }));
+      lastUpdatedRef.current = businessInfo.updatedAt;
     }
   }, [businessInfo]);
 
   const periods = form.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
 
   const handleTogglePeriodActive = (id: string) => {
+    isDirtyRef.current = true;
     setForm(prev => {
       const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
       return {
@@ -81,6 +85,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleUpdatePeriod = (id: string, field: keyof DeliveryPeriod, value: any) => {
+    isDirtyRef.current = true;
     setForm(prev => {
       const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
       return {
@@ -91,6 +96,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleDeletePeriod = (id: string) => {
+    isDirtyRef.current = true;
     setForm(prev => {
       const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
       if (current.length <= 1) {
@@ -105,8 +111,19 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleAddPeriod = () => {
+    isDirtyRef.current = true;
     setForm(prev => {
       const current = prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+
+      // Se já houver um turno 'Noite' desativado, ativa ele diretamente
+      const inactiveNight = current.find(p => p.name.toLowerCase().includes('noite') && !p.active);
+      if (inactiveNight) {
+        return {
+          ...prev,
+          deliveryPeriods: current.map(p => p.id === inactiveNight.id ? { ...p, active: true } : p)
+        };
+      }
+
       const count = current.length;
       const existingNames = current.map(p => p.name.toLowerCase());
       let newName = 'Noite';
@@ -138,6 +155,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleMovePeriod = (index: number, direction: 'up' | 'down') => {
+    isDirtyRef.current = true;
     setForm(prev => {
       const current = [...(prev.deliveryPeriods || DEFAULT_DELIVERY_PERIODS)];
       const targetIndex = direction === 'up' ? index - 1 : index + 1;
@@ -155,6 +173,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleOpeningHoursChange = (day: keyof OpeningHours, field: keyof DayHours, value: any) => {
+    isDirtyRef.current = true;
     setForm(prev => ({
       ...prev,
       openingHours: {
@@ -168,6 +187,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   };
 
   const handleAddressChange = (field: string, value: string) => {
+    isDirtyRef.current = true;
     setForm(prev => ({
       ...prev,
       address: {
@@ -182,6 +202,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
     setIsSaving(true);
     try {
       await onSave(form);
+      isDirtyRef.current = false;
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
     } catch (err) {
@@ -702,10 +723,14 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
             })}
           </div>
 
-          <div className="bg-purple-50/60 border border-purple-200/60 p-3.5 rounded-2xl flex items-center gap-2.5 text-xs text-purple-900">
-            <Sparkles className="w-4 h-4 text-purple-600 flex-shrink-0" />
-            <p>
-              Os períodos ativos acima serão exibidos diretamente para os clientes escolherem ao selecionar a modalidade <strong>Agendar pedido</strong>.
+          <div className="bg-purple-50/60 border border-purple-200/60 p-4 rounded-2xl space-y-1.5 text-xs text-purple-900">
+            <div className="flex items-center gap-2 font-black text-purple-950">
+              <Sparkles className="w-4 h-4 text-purple-600 flex-shrink-0" />
+              <span>Visibilidade dos Períodos para os Clientes</span>
+            </div>
+            <p className="leading-relaxed">
+              Os períodos ativos acima serão exibidos para os clientes na modalidade <strong>Agendar pedido</strong>. 
+              <strong>Importante:</strong> os agendamentos respeitam os <em>Horários de Atendimento por Dia</em> configurados acima — turnos que se iniciam após o horário de fechamento da loja no dia (ex: turno Noite se a loja fechar às 19h) não serão ofertados para aquele dia.
             </p>
           </div>
         </div>
