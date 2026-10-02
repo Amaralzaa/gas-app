@@ -35,7 +35,8 @@ import {
   Printer,
   Navigation,
   Edit2,
-  Zap
+  Zap,
+  Download
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -45,6 +46,7 @@ import { PRODUCTS, calculateEffectivePrice } from '../constants';
 import { playAssignedOrderSound, unlockAudio } from '../utils/sounds';
 import { showSafeNotification } from '../utils/notifications';
 import { QuickPriceEditModal } from './manager/QuickPriceEditModal';
+import { jsPDF } from 'jspdf';
 
 interface DeliveryDashboardProps {
   user: AppUser;
@@ -612,6 +614,249 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
     setIsShareModalOpen(false);
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank');
+  };
+
+  // Gerador de Documento PDF Real com jsPDF
+  const generateFechamentoPdf = () => {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    const empresa = businessInfo?.name?.trim() || 'GÁS EXPRESS';
+    const dataHoje = new Date().toLocaleDateString('pt-BR');
+    const horaAgora = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    // Cabeçalho escuro moderno
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(0, 0, 210, 36, 'F');
+
+    // Faixa amarela decorativa
+    doc.setFillColor(250, 204, 21); // yellow-400
+    doc.rect(0, 36, 210, 2, 'F');
+
+    doc.setTextColor(250, 204, 21);
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(empresa.toUpperCase(), 14, 16);
+
+    doc.setTextColor(226, 232, 240);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text('EXTRATO DIARIO DE FECHAMENTO & PRESTACAO DE CONTAS', 14, 26);
+
+    // Box de Informações do Entregador e Data
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(14, 44, 182, 18, 3, 3, 'F');
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(14, 44, 182, 18, 3, 3, 'S');
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Entregador: ${user.name}`, 20, 52);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Telefone: ${user.phone || 'Nao informado'}`, 20, 57);
+
+    doc.setFont('helvetica', 'bold');
+    doc.text(`Data: ${dataHoje}`, 130, 52);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Gerado as: ${horaAgora}`, 130, 57);
+
+    // Seção 1: Resumo das Vendas
+    let y = 72;
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text('1. RESUMO DE VENDAS DO DIA', 14, y);
+
+    // Tabela Header
+    y += 4;
+    doc.setFillColor(30, 41, 59); // slate-800
+    doc.rect(14, y, 182, 8, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'bold');
+    doc.text('FORMA DE PAGAMENTO', 20, y + 5.5);
+    doc.text('QUANTIDADE', 105, y + 5.5);
+    doc.text('TOTAL RECEBIDO (R$)', 150, y + 5.5);
+
+    const linhas = [
+      { label: 'Dinheiro (Em Especie)', qtd: paymentBreakdown.dinheiro.orders.length, total: paymentBreakdown.dinheiro.total },
+      { label: 'Pix Instantaneo', qtd: paymentBreakdown.pix.orders.length, total: paymentBreakdown.pix.total },
+      { label: 'Cartao de Debito', qtd: paymentBreakdown.debito.orders.length, total: paymentBreakdown.debito.total },
+      { label: 'Cartao de Credito', qtd: paymentBreakdown.credito.orders.length, total: paymentBreakdown.credito.total },
+    ];
+
+    y += 8;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.setTextColor(30, 41, 59);
+
+    linhas.forEach((l, idx) => {
+      if (idx % 2 === 1) {
+        doc.setFillColor(248, 250, 252);
+        doc.rect(14, y, 182, 7, 'F');
+      }
+      doc.text(l.label, 20, y + 5);
+      doc.text(`${l.qtd} pedidos`, 105, y + 5);
+      doc.setFont('helvetica', 'bold');
+      doc.text(`R$ ${l.total.toFixed(2)}`, 150, y + 5);
+      doc.setFont('helvetica', 'normal');
+      doc.setDrawColor(241, 245, 249);
+      doc.line(14, y + 7, 196, y + 7);
+      y += 7;
+    });
+
+    // Linha Total Geral
+    doc.setFillColor(254, 240, 138); // yellow-100
+    doc.rect(14, y, 182, 8, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(15, 23, 42);
+    doc.text('TOTAL GERAL FATURADO', 20, y + 5.5);
+    doc.text(`${myCompletedToday.length} vendas`, 105, y + 5.5);
+    doc.text(`R$ ${paymentBreakdown.totalFaturado.toFixed(2)}`, 150, y + 5.5);
+
+    // Seção 2: Prestação de Contas (Caixa em Dinheiro)
+    y += 18;
+    doc.setFontSize(12);
+    doc.setFont('helvetica', 'bold');
+    doc.text('2. PRESTACAO DE CONTAS (CAIXA FISICO EM MAOS)', 14, y);
+
+    y += 5;
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(14, y, 182, 40, 3, 3, 'F');
+    doc.setDrawColor(203, 213, 225);
+    doc.roundedRect(14, y, 182, 40, 3, 3, 'S');
+
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text('(+) Entradas em Dinheiro (Vendas concluidas):', 20, y + 8);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(22, 163, 74);
+    doc.text(`+ R$ ${paymentBreakdown.dinheiro.total.toFixed(2)}`, 150, y + 8);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'normal');
+    doc.text('(-) Despesas Operacionais pagas pelo Entregador:', 20, y + 16);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(220, 38, 38);
+    doc.text(`- R$ ${totalOpExpensesAmount.toFixed(2)}`, 150, y + 16);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFont('helvetica', 'normal');
+    doc.text('(-) Baixas ja entregues ao Caixa / Gestor:', 20, y + 24);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(37, 99, 235);
+    doc.text(`- R$ ${totalSettledAmount.toFixed(2)}`, 150, y + 24);
+
+    doc.setDrawColor(203, 213, 225);
+    doc.line(18, y + 29, 192, y + 29);
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text('(=) SALDO RESTANTE EM MAOS A ACERTAR:', 20, y + 36);
+    doc.setTextColor(180, 83, 9);
+    doc.text(`R$ ${cashInHand.toFixed(2)}`, 150, y + 36);
+
+    // Seção 3: Baixas Registradas
+    y += 50;
+    if (cashSettlements.length > 0) {
+      doc.setTextColor(15, 23, 42);
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('3. BAIXAS E REPASSES REALIZADOS HOJE', 14, y);
+
+      y += 5;
+      doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'normal');
+      cashSettlements.slice(0, 6).forEach((e) => {
+        const hora = new Date(e.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        doc.text(`• ${hora} - ${e.description}`, 20, y);
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(37, 99, 235);
+        doc.text(`R$ ${Number(e.amount).toFixed(2)}`, 150, y);
+        doc.setTextColor(15, 23, 42);
+        doc.setFont('helvetica', 'normal');
+        y += 6;
+      });
+    }
+
+    // Assinaturas no rodapé
+    y = Math.max(y + 15, 245);
+    doc.setDrawColor(148, 163, 184);
+    doc.line(25, y, 90, y);
+    doc.line(120, y, 185, y);
+
+    doc.setFontSize(8.5);
+    doc.setTextColor(71, 85, 105);
+    doc.setFont('helvetica', 'bold');
+    doc.text(user.name, 57, y + 4, { align: 'center' });
+    doc.text('Responsavel pelo Caixa / Gestor', 152, y + 4, { align: 'center' });
+
+    doc.setFont('helvetica', 'normal');
+    doc.text('Entregador', 57, y + 8, { align: 'center' });
+    doc.text('Conferido e Quitado', 152, y + 8, { align: 'center' });
+
+    doc.setFontSize(7);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Documento emitido automaticamente em ${dataHoje} as ${horaAgora} via App Gas Express`, 105, 285, { align: 'center' });
+
+    return doc;
+  };
+
+  // Compartilhamento Direto do Arquivo PDF (Web Share API com fallback para download)
+  const handleSharePdf = async () => {
+    try {
+      const doc = generateFechamentoPdf();
+      const pdfBlob = doc.output('blob');
+      const cleanName = user.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+      const fileName = `Fechamento_${cleanName}_${new Date().toISOString().slice(0, 10)}.pdf`;
+      const file = new File([pdfBlob], fileName, { type: 'application/pdf' });
+
+      // Se o navegador móvel suportar compartilhamento direto de arquivos (Android Chrome, iOS Safari)
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: `Fechamento Diário - ${user.name}`,
+          text: `Olá! Segue em anexo o arquivo PDF com o fechamento e prestação de contas de hoje (${new Date().toLocaleDateString('pt-BR')}) do entregador ${user.name}.`
+        });
+        showToast('PDF compartilhado com sucesso!');
+        setIsShareModalOpen(false);
+        return;
+      }
+
+      // Caso contrário, salva o arquivo PDF diretamente no dispositivo do usuário
+      doc.save(fileName);
+      showToast('Arquivo PDF baixado no seu dispositivo!');
+      setIsShareModalOpen(false);
+    } catch (err: any) {
+      if (err.name !== 'AbortError') {
+        console.warn('Erro ao compartilhar PDF:', err);
+        try {
+          const doc = generateFechamentoPdf();
+          doc.save(`Fechamento_${new Date().toISOString().slice(0, 10)}.pdf`);
+          showToast('Arquivo PDF baixado!');
+        } catch (saveErr) {
+          alert('Não foi possível gerar o PDF: ' + err.message);
+        }
+      }
+      setIsShareModalOpen(false);
+    }
+  };
+
+  const handleDownloadPdf = () => {
+    try {
+      const doc = generateFechamentoPdf();
+      const cleanName = user.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+      doc.save(`Fechamento_${cleanName}_${new Date().toISOString().slice(0, 10)}.pdf`);
+      showToast('Download do PDF concluído!');
+      setIsShareModalOpen(false);
+    } catch (err: any) {
+      alert('Erro ao baixar PDF: ' + err.message);
+    }
   };
 
   const handlePrintPdf = () => {
@@ -1404,6 +1649,25 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
               </p>
 
               <div className="space-y-2.5">
+                {/* Opção 1: Compartilhar Arquivo PDF direto */}
+                <button
+                  type="button"
+                  onClick={handleSharePdf}
+                  className="w-full bg-yellow-400 hover:bg-yellow-500 active:scale-95 text-slate-950 p-3.5 rounded-2xl font-black text-xs flex items-center gap-3 transition-all cursor-pointer shadow-lg shadow-yellow-400/20"
+                >
+                  <div className="p-2 bg-slate-950 text-yellow-400 rounded-xl">
+                    <Share2 className="w-5 h-5" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-black text-sm">Enviar Arquivo PDF</p>
+                      <span className="bg-slate-950 text-yellow-400 text-[9px] px-1.5 py-0.5 rounded font-black uppercase">Direto</span>
+                    </div>
+                    <p className="text-[10px] text-slate-800 font-medium">Compartilha o arquivo .pdf oficial no WhatsApp ou outros apps</p>
+                  </div>
+                </button>
+
+                {/* Opção 2: Texto formatado no WhatsApp */}
                 <button
                   type="button"
                   onClick={handleShareSummaryWhatsapp}
@@ -1412,26 +1676,42 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   <div className="p-2 bg-green-700/50 rounded-xl">
                     <MessageSquare className="w-5 h-5" />
                   </div>
-                  <div className="text-left">
+                  <div className="text-left flex-1">
                     <p className="font-black">Texto no WhatsApp</p>
                     <p className="text-[10px] text-green-200 font-normal">Envia relatório formatado com quebra de linhas</p>
                   </div>
                 </button>
 
+                {/* Opção 3: Baixar PDF */}
+                <button
+                  type="button"
+                  onClick={handleDownloadPdf}
+                  className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-white p-3 rounded-2xl font-black text-xs flex items-center gap-3 border border-slate-700 transition-all cursor-pointer"
+                >
+                  <div className="p-2 bg-slate-700 text-white rounded-xl">
+                    <Download className="w-4 h-4" />
+                  </div>
+                  <div className="text-left flex-1">
+                    <p className="font-bold">Baixar Arquivo PDF (.pdf)</p>
+                    <p className="text-[10px] text-slate-400 font-normal">Salva o PDF diretamente no seu celular ou computador</p>
+                  </div>
+                </button>
+
+                {/* Opção 4: Visualizar Extrato na Tela */}
                 <button
                   type="button"
                   onClick={() => {
                     setIsShareModalOpen(false);
                     setIsPdfModalOpen(true);
                   }}
-                  className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-white p-3.5 rounded-2xl font-black text-xs flex items-center gap-3 border border-slate-700 transition-all cursor-pointer"
+                  className="w-full bg-slate-800/60 hover:bg-slate-800 active:scale-95 text-slate-300 p-2.5 rounded-2xl font-semibold text-xs flex items-center gap-3 border border-slate-800 transition-all cursor-pointer"
                 >
-                  <div className="p-2 bg-yellow-400 text-slate-950 rounded-xl">
-                    <FileText className="w-5 h-5" />
+                  <div className="p-2 bg-slate-800 text-slate-400 rounded-xl">
+                    <FileText className="w-4 h-4" />
                   </div>
-                  <div className="text-left">
-                    <p className="font-black">Documento em PDF / Imprimir</p>
-                    <p className="text-[10px] text-slate-400 font-normal">Gera extrato formal com layout para download/PDF</p>
+                  <div className="text-left flex-1">
+                    <p className="font-bold text-slate-200">Visualizar Extrato na Tela</p>
+                    <p className="text-[10px] text-slate-400 font-normal">Ver cupom detalhado e opção de imprimir</p>
                   </div>
                 </button>
               </div>
@@ -1458,13 +1738,29 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   <FileText className="w-5 h-5 text-yellow-600" />
                   <span className="font-black text-sm">Extrato de Fechamento</span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  <button
+                    onClick={handleSharePdf}
+                    className="flex items-center gap-1 bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-2.5 py-1.5 rounded-xl font-black text-xs shadow cursor-pointer"
+                    title="Compartilhar Arquivo PDF no WhatsApp ou outros apps"
+                  >
+                    <Share2 className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Compartilhar</span> PDF
+                  </button>
+                  <button
+                    onClick={handleDownloadPdf}
+                    className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-800 px-2.5 py-1.5 rounded-xl font-bold text-xs shadow cursor-pointer"
+                    title="Baixar Arquivo PDF"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">Baixar</span>
+                  </button>
                   <button
                     onClick={handlePrintPdf}
-                    className="flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-3 py-1.5 rounded-xl font-black text-xs shadow cursor-pointer"
+                    className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-800 p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl font-bold text-xs shadow cursor-pointer"
+                    title="Imprimir Cupom"
                   >
-                    <Printer className="w-4 h-4" />
-                    <span>Salvar PDF / Imprimir</span>
+                    <Printer className="w-3.5 h-3.5" />
                   </button>
                   <button 
                     onClick={() => setIsPdfModalOpen(false)}
