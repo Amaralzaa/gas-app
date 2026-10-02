@@ -1059,6 +1059,7 @@ export default function App() {
                 onUpdateUser={handleUpdateUser}
                 expenses={expenses}
                 allCustomers={allUsers.filter(u => u.role === 'cliente')}
+                allCollaborators={allUsers.filter(u => u.role === 'gestor' || u.role === 'admin')}
                 businessInfo={businessInfo}
               />
             </motion.div>

@@ -13,12 +13,26 @@ export interface Address {
   lng?: number;
 }
 
+export interface ProductDiscount {
+  enabled: boolean;
+  type: 'fixed' | 'percentage';
+  value: number; // Ex: 10 (R$ 10,00) ou 10 (10%)
+}
+
 export interface Product {
   id: string;
   name: string;
   price: number;
   image: string;
   description: string;
+  category?: string;
+  unit?: string;
+  brand?: string;
+  isActive?: boolean;
+  pixDiscount?: ProductDiscount;
+  cashDiscount?: ProductDiscount;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface OrderItem {

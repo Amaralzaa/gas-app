@@ -108,3 +108,27 @@ html, body, #root {
   background: rgba(100, 116, 139, 0.7);
 }
 
+/* =============================================
+   ESTILOS DE IMPRESSÃO / SALVAR COMO PDF
+   ============================================= */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #printable-fechamento, #printable-fechamento * {
+    visibility: visible !important;
+  }
+  #printable-fechamento {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100vw !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    padding: 24px !important;
+    background: white !important;
+    color: #0f172a !important;
+    z-index: 999999 !important;
+  }
+}
+

@@ -28,7 +28,12 @@ import {
   Clock,
   Compass,
   Building2,
-  Banknote
+  Banknote,
+  ChevronDown,
+  ChevronUp,
+  FileText,
+  Printer,
+  Navigation
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
@@ -47,6 +52,7 @@ interface DeliveryDashboardProps {
   onUpdateUser: (user: AppUser) => void;
   expenses: Expense[];
   allCustomers: AppUser[];
+  allCollaborators?: AppUser[];
   businessInfo?: BusinessInfo;
 }
 
@@ -59,6 +65,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   onUpdateUser, 
   expenses, 
   allCustomers,
+  allCollaborators = [],
   businessInfo 
 }) => {
   const [activeTab, setActiveTab] = useState<'deliveries' | 'map' | 'finance'>('deliveries');
@@ -67,11 +74,16 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
   const [isAddingSale, setIsAddingSale] = useState(false);
   const [isAddingExpense, setIsAddingExpense] = useState(false);
-  const [isAddingSettlement, setIsAddingSettlement] = useState(false); // Prestação de contas / Baixa
+  const [isAddingSettlement, setIsAddingSettlement] = useState(false);
+  const [isShareModalOpen, setIsShareModalOpen] = useState(false); // Modal de escolha de compartilhamento
+  const [isPdfModalOpen, setIsPdfModalOpen] = useState(false);     // Visualização e impressão do PDF
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // Acordeom de Formas de Pagamento (Financeiro Clean)
+  const [expandedPaymentMethod, setExpandedPaymentMethod] = useState<string | null>(null);
+
   // Estado para Nova Venda
-  const [saleCustomerType, setSaleCustomerType] = useState<'existing' | 'walkin'>('walkin');
+  const [saleCustomerType, setSaleCustomerType] = useState<'walkin' | 'existing'>('walkin');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCustomer, setSelectedCustomer] = useState<AppUser | null>(null);
   const [walkinName, setWalkinName] = useState('');
@@ -80,6 +92,8 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   const [walkinNeighborhood, setWalkinNeighborhood] = useState('');
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<'Dinheiro' | 'Pix' | 'Cartão de Débito' | 'Cartão de Crédito'>('Dinheiro');
   const [cart, setCart] = useState<{ [id: string]: number }>({ p13: 1 });
+  const [saleGpsCoords, setSaleGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [isCapturingGps, setIsCapturingGps] = useState(false);
 
   // Estado para Lançar Despesa
   const [expenseDesc, setExpenseDesc] = useState('');
@@ -120,6 +134,39 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
         onUpdateOrder({ ...o, deliveryPersonLocation: { lat, lng } });
       });
   };
+
+  // Captura de GPS de Alta Precisão (Usada para Venda do Consumidor Rua)
+  const captureFreshGps = async (): Promise<{ lat: number; lng: number } | null> => {
+    setIsCapturingGps(true);
+    if (!('geolocation' in navigator)) {
+      setIsCapturingGps(false);
+      return user.location || null;
+    }
+    return new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+          setSaleGpsCoords(coords);
+          updateLocation(coords.lat, coords.lng);
+          setIsCapturingGps(false);
+          resolve(coords);
+        },
+        (err) => {
+          console.warn('Erro ao obter GPS fresco para venda:', err.message);
+          setIsCapturingGps(false);
+          resolve(user.location || null);
+        },
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 10000 }
+      );
+    });
+  };
+
+  // Dispara captura de GPS ao abrir modal de Nova Venda
+  useEffect(() => {
+    if (isAddingSale) {
+      captureFreshGps();
+    }
+  }, [isAddingSale]);
 
   // GPS Watcher
   useEffect(() => {
@@ -281,56 +328,74 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     return myExpensesToday.filter(e => !cashSettlements.includes(e));
   }, [myExpensesToday, cashSettlements]);
 
-  // Segmentação por Tipo de Pagamento
+  // Segmentação Detalhada por Tipo de Pagamento (Com listagem dos pedidos)
   const paymentBreakdown = useMemo(() => {
-    let dinheiro = 0;
-    let pix = 0;
-    let debito = 0;
-    let credito = 0;
-    let countDinheiro = 0;
-    let countPix = 0;
-    let countDebito = 0;
-    let countCredito = 0;
+    const dinheiroOrders: Order[] = [];
+    const pixOrders: Order[] = [];
+    const debitoOrders: Order[] = [];
+    const creditoOrders: Order[] = [];
 
     myCompletedToday.forEach(o => {
       const pm = (o.paymentMethod || '').toLowerCase();
-      const val = Number(o.total || 0);
-
       if (pm.includes('dinheiro')) {
-        dinheiro += val;
-        countDinheiro++;
+        dinheiroOrders.push(o);
       } else if (pm.includes('pix')) {
-        pix += val;
-        countPix++;
+        pixOrders.push(o);
       } else if (pm.includes('débito') || pm.includes('debito')) {
-        debito += val;
-        countDebito++;
+        debitoOrders.push(o);
       } else {
-        // Cartão de Crédito ou padrão
-        credito += val;
-        countCredito++;
+        creditoOrders.push(o);
       }
     });
 
-    const totalFaturado = dinheiro + pix + debito + credito;
+    const sumTotal = (list: Order[]) => list.reduce((acc, o) => acc + (o.total || 0), 0);
+
     return {
-      dinheiro,
-      countDinheiro,
-      pix,
-      countPix,
-      debito,
-      countDebito,
-      credito,
-      countCredito,
-      totalFaturado
+      dinheiro: {
+        total: sumTotal(dinheiroOrders),
+        orders: dinheiroOrders,
+        icon: '💵',
+        label: 'Dinheiro'
+      },
+      pix: {
+        total: sumTotal(pixOrders),
+        orders: pixOrders,
+        icon: '⚡',
+        label: 'Pix'
+      },
+      debito: {
+        total: sumTotal(debitoOrders),
+        orders: debitoOrders,
+        icon: '💳',
+        label: 'Débito'
+      },
+      credito: {
+        total: sumTotal(creditoOrders),
+        orders: creditoOrders,
+        icon: '💳',
+        label: 'Crédito'
+      },
+      totalFaturado: sumTotal(myCompletedToday)
     };
   }, [myCompletedToday]);
 
   // Caixa em Espécie (Dinheiro em Mãos)
   const totalOpExpensesAmount = operationalExpenses.reduce((acc, e) => acc + Number(e.amount || 0), 0);
   const totalSettledAmount = cashSettlements.reduce((acc, e) => acc + Number(e.amount || 0), 0);
-  // Saldo em dinheiro no bolso do entregador
-  const cashInHand = Math.max(0, paymentBreakdown.dinheiro - totalOpExpensesAmount - totalSettledAmount);
+  const cashInHand = Math.max(0, paymentBreakdown.dinheiro.total - totalOpExpensesAmount - totalSettledAmount);
+
+  // Lista de Gestores para seleção rápida de "Entregue a quem?"
+  const managerOptions = useMemo(() => {
+    const managers = allCollaborators.filter(c => c.role === 'gestor' || c.role === 'admin');
+    const list: string[] = [];
+    managers.forEach(m => {
+      if (m.name && !list.includes(m.name)) list.push(m.name);
+    });
+    if (!list.some(n => n.toLowerCase().includes('gestor'))) {
+      list.unshift('Gestor Responsável');
+    }
+    return list;
+  }, [allCollaborators]);
 
   // Busca de Clientes para Nova Venda
   const filteredCustomers = useMemo(() => {
@@ -359,26 +424,32 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     showToast(`Pedido #${order.id} concluído com sucesso!`);
   };
 
-  // Submissão de Nova Venda
-  const handleConfirmNewSale = (e: React.FormEvent) => {
+  // Submissão de Nova Venda com Coleta de GPS Obrigatória no Consumidor Rua
+  const handleConfirmNewSale = async (e: React.FormEvent) => {
     e.preventDefault();
     if (cartTotal <= 0) {
       alert('Selecione ao menos 1 item para a venda.');
       return;
     }
 
-    let customerName = 'Consumidor Final';
+    // Se for consumidor rua, assegura captura fresca de GPS para o Mapa de Calor
+    let locationToSave = saleGpsCoords || user.location;
+    if (saleCustomerType === 'walkin' && !locationToSave) {
+      locationToSave = await captureFreshGps();
+    }
+
+    let customerName = 'Consumidor Final (Rua)';
     let customerPhone = '';
     let customerId = 'walkin-' + Math.random().toString(36).substr(2, 7);
     let address: Address = {
-      street: 'Venda Presencial / Rua',
+      street: walkinStreet.trim() || 'Venda Consumidor Rua',
       number: 'S/N',
-      neighborhood: 'Atendimento Rápido',
+      neighborhood: walkinNeighborhood.trim() || 'Venda em Trânsito',
       city: 'Niterói',
       state: 'RJ',
       cep: '24000-000',
-      lat: user.location?.lat,
-      lng: user.location?.lng
+      lat: locationToSave?.lat,
+      lng: locationToSave?.lng
     };
 
     if (saleCustomerType === 'existing' && selectedCustomer) {
@@ -386,17 +457,15 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       customerName = selectedCustomer.name || 'Cliente';
       customerPhone = selectedCustomer.phone || '';
       if (selectedCustomer.addresses && selectedCustomer.addresses.length > 0) {
-        address = selectedCustomer.addresses[0];
+        address = {
+          ...selectedCustomer.addresses[0],
+          lat: selectedCustomer.addresses[0].lat || locationToSave?.lat,
+          lng: selectedCustomer.addresses[0].lng || locationToSave?.lng
+        };
       }
     } else {
       if (walkinName.trim()) customerName = walkinName.trim();
       if (walkinPhone.trim()) customerPhone = walkinPhone.trim();
-      if (walkinStreet.trim()) {
-        address.street = walkinStreet.trim();
-      }
-      if (walkinNeighborhood.trim()) {
-        address.neighborhood = walkinNeighborhood.trim();
-      }
     }
 
     const newSaleOrder: Order = {
@@ -416,9 +485,10 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       paymentMethod: selectedPaymentMethod,
       status: 'Concluído',
       deliveryPersonId: user.id,
+      deliveryPersonLocation: locationToSave ? { lat: locationToSave.lat, lng: locationToSave.lng } : undefined,
       createdAt: new Date().toISOString(),
       completedAt: new Date().toISOString(),
-      feedback: `[Venda Presencial pelo Entregador ${user.name}]`
+      feedback: `[Venda Presencial Entregador: ${user.name}${locationToSave ? ` | GPS: ${locationToSave.lat.toFixed(5)}, ${locationToSave.lng.toFixed(5)}` : ''}]`
     };
 
     onAddOrder(newSaleOrder);
@@ -429,7 +499,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     setWalkinPhone('');
     setWalkinStreet('');
     setWalkinNeighborhood('');
-    showToast(`✅ Venda de R$ ${cartTotal.toFixed(2)} cadastrada e concluída!`);
+    showToast(`✅ Venda de R$ ${cartTotal.toFixed(2)} salva com GPS!`);
   };
 
   // Submissão de Despesa
@@ -487,10 +557,10 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     setSettlementAmount('');
     setSettlementRecipient('');
     setSettlementNote('');
-    showToast(`🏦 Baixa de R$ ${amountVal.toFixed(2)} realizada com sucesso!`);
+    showToast(`🏦 Baixa de R$ ${amountVal.toFixed(2)} repassada para ${recipient}!`);
   };
 
-  // Compartilhar Resumo no WhatsApp do Gestor
+  // Compartilhar Resumo no WhatsApp do Gestor (Opção Texto)
   const handleShareSummaryWhatsapp = () => {
     const dataHoje = new Date().toLocaleDateString('pt-BR');
     const nomeDistribuidora = businessInfo?.name?.trim() || 'Gás Express';
@@ -504,20 +574,25 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
     txt += `💰 *Faturamento Total:* R$ ${paymentBreakdown.totalFaturado.toFixed(2)}\n\n`;
     
     txt += `*RECEBIMENTO POR MODALIDADE:*\n`;
-    txt += `💵 Dinheiro: R$ ${paymentBreakdown.dinheiro.toFixed(2)} (${paymentBreakdown.countDinheiro} vendas)\n`;
-    txt += `⚡ Pix: R$ ${paymentBreakdown.pix.toFixed(2)} (${paymentBreakdown.countPix} vendas)\n`;
-    txt += `💳 Débito: R$ ${paymentBreakdown.debito.toFixed(2)} (${paymentBreakdown.countDebito} vendas)\n`;
-    txt += `💳 Crédito: R$ ${paymentBreakdown.credito.toFixed(2)} (${paymentBreakdown.countCredito} vendas)\n\n`;
+    txt += `💵 Dinheiro: R$ ${paymentBreakdown.dinheiro.total.toFixed(2)} (${paymentBreakdown.dinheiro.orders.length} vendas)\n`;
+    txt += `⚡ Pix: R$ ${paymentBreakdown.pix.total.toFixed(2)} (${paymentBreakdown.pix.orders.length} vendas)\n`;
+    txt += `💳 Débito: R$ ${paymentBreakdown.debito.total.toFixed(2)} (${paymentBreakdown.debito.orders.length} vendas)\n`;
+    txt += `💳 Crédito: R$ ${paymentBreakdown.credito.total.toFixed(2)} (${paymentBreakdown.credito.orders.length} vendas)\n\n`;
 
     txt += `*CAIXA EM DINHEIRO FÍSICO:*\n`;
-    txt += `(+) Entradas em Dinheiro: R$ ${paymentBreakdown.dinheiro.toFixed(2)}\n`;
+    txt += `(+) Entradas em Dinheiro: R$ ${paymentBreakdown.dinheiro.total.toFixed(2)}\n`;
     txt += `(-) Despesas do Dia: R$ ${totalOpExpensesAmount.toFixed(2)}\n`;
     txt += `(-) Baixas Já Entregues: R$ ${totalSettledAmount.toFixed(2)}\n`;
     txt += `👉 *SALDO RESTANTE EM MÃOS:* R$ ${cashInHand.toFixed(2)}\n`;
     txt += `------------------------------------\n`;
     txt += `_Fechamento gerado via App Entregador_`;
 
+    setIsShareModalOpen(false);
     window.open(`https://wa.me/?text=${encodeURIComponent(txt)}`, '_blank');
+  };
+
+  const handlePrintPdf = () => {
+    window.print();
   };
 
   return (
@@ -643,7 +718,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   </p>
                   <button
                     onClick={() => setIsAddingSale(true)}
-                    className="mt-5 inline-flex items-center gap-2 bg-yellow-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs shadow-md active:scale-95 transition-all"
+                    className="mt-5 inline-flex items-center gap-2 bg-yellow-400 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs shadow-md active:scale-95 transition-all cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Lançar Venda Direta</span>
@@ -735,7 +810,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                       {o.status === 'Atribuído' ? (
                         <button 
                           onClick={() => onUpdateOrder({ ...o, status: 'Em Rota' })} 
-                          className="bg-orange-500 hover:bg-orange-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md"
+                          className="bg-orange-500 hover:bg-orange-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md cursor-pointer"
                         >
                           <Check className="w-4 h-4" />
                           <span>ACEITAR ROTA</span>
@@ -743,7 +818,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                       ) : (
                         <button 
                           onClick={() => handleCompleteOrder(o)} 
-                          className="bg-green-500 hover:bg-green-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md"
+                          className="bg-green-500 hover:bg-green-400 active:scale-95 text-slate-950 py-3 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs transition-all shadow-md cursor-pointer"
                         >
                           <Check className="w-4 h-4" />
                           <span>ENTREGUE</span>
@@ -760,7 +835,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                           const message = `Olá ${o.customerName || 'Cliente'}, aqui é o entregador da ${storeName}! Estou a caminho do seu endereço agora. Acompanhe minha entrega ao vivo aqui: ${link}`;
                           window.open(`https://wa.me/55${(o.phone || '').replace(/\D/g, '')}?text=${encodeURIComponent(message)}`, '_blank');
                         }}
-                        className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-yellow-400 py-2.5 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs border border-slate-700 transition-all"
+                        className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-yellow-400 py-2.5 px-3 rounded-xl font-black flex items-center justify-center gap-2 text-xs border border-slate-700 transition-all cursor-pointer"
                       >
                         <MessageSquare className="w-4 h-4 text-green-400" />
                         <span>AVISAR NO WHATSAPP</span>
@@ -793,13 +868,13 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <button 
                       onClick={handleForceGps} 
-                      className="bg-slate-800 hover:bg-slate-700 text-yellow-400 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all border border-slate-700 active:scale-95"
+                      className="bg-slate-800 hover:bg-slate-700 text-yellow-400 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all border border-slate-700 active:scale-95 cursor-pointer"
                     >
                       📡 GPS
                     </button>
                     <button 
                       onClick={handleSimulateStep} 
-                      className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all active:scale-95 shadow-sm"
+                      className="bg-yellow-400 hover:bg-yellow-300 text-slate-950 px-2.5 py-1.5 rounded-xl text-[10px] font-black transition-all active:scale-95 shadow-sm cursor-pointer"
                     >
                       🛵 Andar
                     </button>
@@ -895,7 +970,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                       </a>
                       <button
                         onClick={() => handleCompleteOrder(nextActiveDelivery)}
-                        className="bg-green-500 hover:bg-green-400 text-slate-950 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow"
+                        className="bg-green-500 hover:bg-green-400 text-slate-950 py-2 rounded-xl font-black text-xs flex items-center justify-center gap-1.5 shadow cursor-pointer"
                       >
                         <Check className="w-3.5 h-3.5" />
                         <span>Entregue</span>
@@ -908,7 +983,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
           )}
 
           {/* ========================================================= */}
-          {/* ABA 3: FINANCEIRO & PRESTAÇÃO DE CONTAS                    */}
+          {/* ABA 3: FINANCEIRO & PRESTAÇÃO DE CONTAS (CLEAN & MODERNO) */}
           {/* ========================================================= */}
           {activeTab === 'finance' && (
             <motion.div
@@ -916,14 +991,14 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex-1 overflow-y-auto p-4 pb-28 space-y-4 max-w-md mx-auto w-full"
+              className="flex-1 overflow-y-auto p-4 pb-28 space-y-3.5 max-w-md mx-auto w-full"
             >
-              {/* Botão de Destaque: NOVA VENDA */}
+              {/* Barra de Ação Rápida */}
               <div className="grid grid-cols-2 gap-2.5">
                 <button
                   type="button"
                   onClick={() => setIsAddingSale(true)}
-                  className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-slate-950 p-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-yellow-400/20 transition-all cursor-pointer"
+                  className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-slate-950 p-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-yellow-400/20 transition-all cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   <span>NOVA VENDA</span>
@@ -932,209 +1007,171 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                 <button
                   type="button"
                   onClick={() => setIsAddingExpense(true)}
-                  className="bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 border border-slate-700 p-3.5 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  className="bg-slate-900 hover:bg-slate-800 active:scale-95 text-slate-200 border border-slate-800 p-3 rounded-2xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   <TrendingDown className="w-4 h-4 text-red-400" />
                   <span>LANÇAR DESPESA</span>
                 </button>
               </div>
 
-              {/* Card Principal: Caixa em Dinheiro e Prestação de Contas */}
-              <div className="bg-gradient-to-br from-slate-900 to-slate-900/90 p-5 rounded-3xl border border-slate-800 shadow-xl relative overflow-hidden">
-                <div className="flex items-center justify-between mb-3">
+              {/* Card de Caixa em Dinheiro Físico (Compacto) */}
+              <div className="bg-gradient-to-br from-slate-900 to-slate-900/90 p-4 rounded-3xl border border-slate-800 shadow-xl">
+                <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <div className="p-2 bg-yellow-400/10 rounded-xl text-yellow-400">
-                      <Wallet className="w-5 h-5" />
+                      <Wallet className="w-4 h-4" />
                     </div>
                     <div>
-                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Caixa do Entregador</p>
-                      <h3 className="font-black text-sm text-white">Dinheiro Físico em Mãos</h3>
+                      <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider">Dinheiro em Mãos</p>
+                      <p className="text-2xl font-black text-yellow-400">
+                        R$ {cashInHand.toFixed(2)}
+                      </p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-black bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full border border-green-500/30">
-                    Hoje
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettlementAmount(cashInHand > 0 ? cashInHand.toFixed(2) : '');
+                      setIsAddingSettlement(true);
+                    }}
+                    className="bg-yellow-400 hover:bg-yellow-300 active:scale-95 text-slate-950 font-black text-[11px] px-3 py-2 rounded-xl shadow transition-all cursor-pointer shrink-0"
+                  >
+                    Dar Baixa
+                  </button>
                 </div>
 
-                <div className="mb-4 bg-slate-950/80 p-4 rounded-2xl border border-slate-800/80">
-                  <p className="text-xs text-slate-400 font-bold mb-1">Saldo a Prestar Contas:</p>
-                  <p className="text-3xl font-black text-yellow-400">
-                    R$ {cashInHand.toFixed(2)}
-                  </p>
-                  <div className="mt-3 pt-3 border-t border-slate-800/60 grid grid-cols-3 gap-2 text-[10px] text-slate-400">
-                    <div>
-                      <span className="block text-slate-500 font-bold">Vendas Dinheiro:</span>
-                      <span className="font-black text-green-400">+ R$ {paymentBreakdown.dinheiro.toFixed(2)}</span>
-                    </div>
-                    <div>
-                      <span className="block text-slate-500 font-bold">Despesas Pagas:</span>
-                      <span className="font-black text-red-400">- R$ {totalOpExpensesAmount.toFixed(2)}</span>
-                    </div>
-                    <div>
-                      <span className="block text-slate-500 font-bold">Baixas Feitas:</span>
-                      <span className="font-black text-blue-400">- R$ {totalSettledAmount.toFixed(2)}</span>
-                    </div>
+                <div className="grid grid-cols-3 gap-2 pt-2.5 border-t border-slate-800/80 text-[10px] text-slate-400">
+                  <div>
+                    <span className="block text-slate-500">Vendas Dinheiro:</span>
+                    <span className="font-black text-green-400">+ R$ {paymentBreakdown.dinheiro.total.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-500">Despesas:</span>
+                    <span className="font-black text-red-400">- R$ {totalOpExpensesAmount.toFixed(2)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-slate-500">Baixas Repassadas:</span>
+                    <span className="font-black text-blue-400">- R$ {totalSettledAmount.toFixed(2)}</span>
                   </div>
                 </div>
-
-                {/* Botão de Dar Baixa em Dinheiro */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSettlementAmount(cashInHand > 0 ? cashInHand.toFixed(2) : '');
-                    setIsAddingSettlement(true);
-                  }}
-                  className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-yellow-400 border border-yellow-400/40 py-3 px-4 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
-                >
-                  <Banknote className="w-4 h-4" />
-                  <span>DAR BAIXA NO CAIXA (REPASSAR DINHEIRO)</span>
-                </button>
               </div>
 
-              {/* Resumo do Dia por Forma de Pagamento */}
-              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
-                <div className="flex items-center justify-between">
+              {/* Vendas do Dia por Pagamento (Layout Clean em Linhas / Acordeom) */}
+              <div className="bg-slate-900 p-4 rounded-3xl border border-slate-800 shadow-xl space-y-2.5">
+                <div className="flex items-center justify-between pb-1">
                   <div className="flex items-center gap-2">
                     <Receipt className="w-4 h-4 text-yellow-400" />
                     <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider">
-                      Vendas do Dia por Pagamento
+                      Vendas por Pagamento (Hoje)
                     </h3>
                   </div>
-                  <span className="text-xs font-black text-white">
-                    {myCompletedToday.length} pedidos
+                  <span className="text-[11px] font-black text-white bg-slate-800 px-2 py-0.5 rounded-full">
+                    {myCompletedToday.length} vendas • R$ {paymentBreakdown.totalFaturado.toFixed(2)}
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2.5">
-                  {/* Dinheiro */}
-                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
-                    <div className="flex items-center justify-between text-slate-400 mb-1">
-                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
-                        💵 Dinheiro
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-500">
-                        {paymentBreakdown.countDinheiro}x
-                      </span>
-                    </div>
-                    <p className="text-base font-black text-green-400">
-                      R$ {paymentBreakdown.dinheiro.toFixed(2)}
-                    </p>
-                  </div>
-
-                  {/* Pix */}
-                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
-                    <div className="flex items-center justify-between text-slate-400 mb-1">
-                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
-                        ⚡ Pix
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-500">
-                        {paymentBreakdown.countPix}x
-                      </span>
-                    </div>
-                    <p className="text-base font-black text-teal-400">
-                      R$ {paymentBreakdown.pix.toFixed(2)}
-                    </p>
-                  </div>
-
-                  {/* Cartão de Débito */}
-                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
-                    <div className="flex items-center justify-between text-slate-400 mb-1">
-                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
-                        💳 Débito
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-500">
-                        {paymentBreakdown.countDebito}x
-                      </span>
-                    </div>
-                    <p className="text-base font-black text-blue-400">
-                      R$ {paymentBreakdown.debito.toFixed(2)}
-                    </p>
-                  </div>
-
-                  {/* Cartão de Crédito */}
-                  <div className="bg-slate-950 p-3 rounded-2xl border border-slate-800/80">
-                    <div className="flex items-center justify-between text-slate-400 mb-1">
-                      <span className="text-[10px] font-black uppercase flex items-center gap-1">
-                        💳 Crédito
-                      </span>
-                      <span className="text-[10px] font-bold text-slate-500">
-                        {paymentBreakdown.countCredito}x
-                      </span>
-                    </div>
-                    <p className="text-base font-black text-purple-400">
-                      R$ {paymentBreakdown.credito.toFixed(2)}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Total Faturado Geral */}
-                <div className="bg-slate-950/80 p-3 rounded-2xl border border-slate-800 flex justify-between items-center">
-                  <span className="text-xs font-black text-slate-400">TOTAL FATURADO HOJE:</span>
-                  <span className="text-lg font-black text-yellow-400">
-                    R$ {paymentBreakdown.totalFaturado.toFixed(2)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Movimentações do Dia (Despesas e Baixas) */}
-              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                    <History className="w-4 h-4 text-yellow-400" />
-                    Saídas & Baixas Hoje
-                  </h3>
-                  <span className="text-[10px] font-bold text-slate-400">
-                    Total: R$ {(totalOpExpensesAmount + totalSettledAmount).toFixed(2)}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  {myExpensesToday.length === 0 ? (
-                    <p className="text-xs text-slate-500 text-center py-4 bg-slate-950/50 rounded-2xl border border-slate-800/50">
-                      Nenhuma saída ou baixa registrada hoje.
-                    </p>
-                  ) : (
-                    myExpensesToday.map(e => {
-                      const isSettlement = cashSettlements.includes(e);
-                      return (
-                        <div 
-                          key={e.id} 
-                          className="bg-slate-950 p-3 rounded-2xl flex justify-between items-center border border-slate-800/80"
+                {/* 4 Linhas Compactas que expandem com os detalhes */}
+                <div className="space-y-1.5">
+                  {[
+                    { id: 'dinheiro', data: paymentBreakdown.dinheiro },
+                    { id: 'pix', data: paymentBreakdown.pix },
+                    { id: 'debito', data: paymentBreakdown.debito },
+                    { id: 'credito', data: paymentBreakdown.credito }
+                  ].map(({ id, data }) => {
+                    const isExpanded = expandedPaymentMethod === id;
+                    return (
+                      <div key={id} className="bg-slate-950/80 border border-slate-800/80 rounded-2xl overflow-hidden transition-all">
+                        <button
+                          type="button"
+                          onClick={() => setExpandedPaymentMethod(isExpanded ? null : id)}
+                          className="w-full p-3 flex items-center justify-between hover:bg-slate-800/40 transition-all cursor-pointer text-left"
                         >
-                          <div className="min-w-0 pr-2">
-                            <p className="font-bold text-xs text-slate-200 truncate">{e.description}</p>
-                            <p className="text-[10px] text-slate-500">
-                              {new Date(e.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} • {e.category}
-                            </p>
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span className="text-base shrink-0">{data.icon}</span>
+                            <div>
+                              <span className="text-xs font-black text-white">{data.label}</span>
+                              <span className="text-[10px] text-slate-400 block font-medium">
+                                {data.orders.length} {data.orders.length === 1 ? 'venda' : 'vendas'}
+                              </span>
+                            </div>
                           </div>
-                          <p className={`font-black text-xs shrink-0 ${isSettlement ? 'text-blue-400' : 'text-red-400'}`}>
-                            - R$ {Number(e.amount).toFixed(2)}
-                          </p>
-                        </div>
-                      );
-                    })
-                  )}
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-xs font-black text-yellow-400">
+                              R$ {data.total.toFixed(2)}
+                            </span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-4 h-4 text-slate-400" />
+                            ) : (
+                              <ChevronDown className="w-4 h-4 text-slate-400" />
+                            )}
+                          </div>
+                        </button>
+
+                        {/* Detalhe das Vendas desta Modalidade */}
+                        <AnimatePresence>
+                          {isExpanded && (
+                            <motion.div
+                              initial={{ height: 0, opacity: 0 }}
+                              animate={{ height: 'auto', opacity: 1 }}
+                              exit={{ height: 0, opacity: 0 }}
+                              className="border-t border-slate-800/60 bg-slate-950 p-2.5 space-y-1.5"
+                            >
+                              {data.orders.length === 0 ? (
+                                <p className="text-[11px] text-slate-500 py-1.5 text-center font-medium">
+                                  Nenhuma venda em {data.label.toLowerCase()} hoje.
+                                </p>
+                              ) : (
+                                data.orders.map(order => {
+                                  const itemsSummary = order.items
+                                    .map(i => `${i.quantity}x ${PRODUCTS.find(p => p.id === i.productId)?.name || 'Gás'}`)
+                                    .join(', ');
+                                  const timeStr = new Date(order.completedAt || order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                                  return (
+                                    <div 
+                                      key={order.id} 
+                                      className="bg-slate-900/90 p-2.5 rounded-xl border border-slate-800/60 flex items-center justify-between text-xs"
+                                    >
+                                      <div className="min-w-0 pr-2">
+                                        <p className="font-bold text-slate-200 truncate">{order.customerName}</p>
+                                        <p className="text-[10px] text-slate-400 truncate">{itemsSummary || '1 item'}</p>
+                                      </div>
+                                      <div className="text-right shrink-0">
+                                        <p className="font-black text-white">R$ {(order.total || 0).toFixed(2)}</p>
+                                        <p className="text-[9px] text-slate-500">{timeStr}</p>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Fechamento do Fim do Dia / Compartilhamento */}
-              <div className="bg-slate-900 p-5 rounded-3xl border border-slate-800 shadow-xl space-y-3">
+              {/* Botão de Fechamento do Dia (Abre escolha: PDF ou Texto) */}
+              <div className="bg-slate-900 p-4 rounded-3xl border border-slate-800 shadow-xl space-y-2.5">
                 <div className="flex items-center justify-between">
                   <h3 className="font-black text-xs text-slate-300 uppercase tracking-wider flex items-center gap-2">
                     <Share2 className="w-4 h-4 text-green-400" />
-                    Fechamento do Fim do Dia
+                    Fechamento do Turno / Dia
                   </h3>
                 </div>
-                <p className="text-xs text-slate-400">
-                  Envie o relatório consolidado com resumo de vendas, despesas, baixas e saldo em dinheiro para a gerência.
+                <p className="text-[11px] text-slate-400 leading-tight">
+                  Envie o balanço completo das vendas, despesas, baixas e saldo em dinheiro para a gerência.
                 </p>
                 <button
                   type="button"
-                  onClick={handleShareSummaryWhatsapp}
-                  className="w-full bg-green-600 hover:bg-green-500 active:scale-95 text-white py-3.5 px-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-green-600/20 transition-all cursor-pointer"
+                  onClick={() => setIsShareModalOpen(true)}
+                  className="w-full bg-green-600 hover:bg-green-500 active:scale-95 text-white py-3 px-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-green-600/20 transition-all cursor-pointer"
                 >
-                  <MessageSquare className="w-4 h-4" />
-                  <span>COMPARTILHAR FECHAMENTO NO WHATSAPP</span>
+                  <Share2 className="w-4 h-4" />
+                  <span>COMPARTILHAR FECHAMENTO (PDF / TEXTO)</span>
                 </button>
               </div>
             </motion.div>
@@ -1218,7 +1255,212 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* MODAL 1: NOVA VENDA (CORRIGIDO E CONECTADO AO BANCO)       */}
+      {/* MODAL: ESCOLHA DE COMPARTILHAMENTO (WHATSAPP vs PDF)      */}
+      {/* ========================================================= */}
+      <AnimatePresence>
+        {isShareModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-[70] p-4 flex items-center justify-center">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 w-full max-w-sm rounded-3xl p-6 border border-slate-800 shadow-2xl space-y-4"
+            >
+              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                <h3 className="font-black text-base text-white">Compartilhar Fechamento</h3>
+                <button 
+                  onClick={() => setIsShareModalOpen(false)}
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-slate-400">
+                Como você deseja compartilhar a prestação de contas do dia?
+              </p>
+
+              <div className="space-y-2.5">
+                <button
+                  type="button"
+                  onClick={handleShareSummaryWhatsapp}
+                  className="w-full bg-green-600 hover:bg-green-500 active:scale-95 text-white p-3.5 rounded-2xl font-black text-xs flex items-center gap-3 transition-all cursor-pointer shadow-lg shadow-green-600/20"
+                >
+                  <div className="p-2 bg-green-700/50 rounded-xl">
+                    <MessageSquare className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-black">Texto no WhatsApp</p>
+                    <p className="text-[10px] text-green-200 font-normal">Envia relatório formatado com quebra de linhas</p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsShareModalOpen(false);
+                    setIsPdfModalOpen(true);
+                  }}
+                  className="w-full bg-slate-800 hover:bg-slate-700 active:scale-95 text-white p-3.5 rounded-2xl font-black text-xs flex items-center gap-3 border border-slate-700 transition-all cursor-pointer"
+                >
+                  <div className="p-2 bg-yellow-400 text-slate-950 rounded-xl">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                  <div className="text-left">
+                    <p className="font-black">Documento em PDF / Imprimir</p>
+                    <p className="text-[10px] text-slate-400 font-normal">Gera extrato formal com layout para download/PDF</p>
+                  </div>
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================= */}
+      {/* MODAL: VISUALIZAÇÃO E IMPRESSÃO DO PDF DO FECHAMENTO       */}
+      {/* ========================================================= */}
+      <AnimatePresence>
+        {isPdfModalOpen && (
+          <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-[80] p-4 flex items-center justify-center overflow-y-auto">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 20 }}
+              className="bg-white text-slate-900 w-full max-w-lg rounded-3xl p-6 shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+            >
+              {/* Barra superior de controle */}
+              <div className="flex justify-between items-center pb-3 border-b border-slate-200 shrink-0">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-yellow-600" />
+                  <span className="font-black text-sm">Extrato de Fechamento</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handlePrintPdf}
+                    className="flex items-center gap-1.5 bg-yellow-400 hover:bg-yellow-500 text-slate-900 px-3 py-1.5 rounded-xl font-black text-xs shadow cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4" />
+                    <span>Salvar PDF / Imprimir</span>
+                  </button>
+                  <button 
+                    onClick={() => setIsPdfModalOpen(false)}
+                    className="p-1.5 rounded-xl bg-slate-100 text-slate-500 hover:text-slate-900 cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Área do Documento / Cupom Fiscal */}
+              <div id="printable-fechamento" className="flex-1 overflow-y-auto py-4 space-y-4 text-xs pr-1">
+                <div className="text-center pb-3 border-b border-slate-200">
+                  <h2 className="text-lg font-black uppercase tracking-wider">{businessInfo?.name || 'GÁS EXPRESS'}</h2>
+                  <p className="text-[11px] text-slate-500">Relatório Diário de Prestação de Contas do Entregador</p>
+                  <div className="mt-2 inline-flex items-center gap-4 bg-slate-100 px-3 py-1 rounded-xl text-[11px] font-bold">
+                    <span>👤 {user.name}</span>
+                    <span>📅 {new Date().toLocaleDateString('pt-BR')}</span>
+                  </div>
+                </div>
+
+                {/* Resumo de Vendas */}
+                <div className="space-y-2">
+                  <h4 className="font-black text-[11px] uppercase tracking-wider text-slate-500">1. Resumo das Vendas</h4>
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-slate-400 text-[10px] uppercase font-bold">
+                        <th className="py-1">Modalidade</th>
+                        <th className="py-1 text-center">Qtd</th>
+                        <th className="py-1 text-right">Total (R$)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-xs font-medium">
+                      <tr>
+                        <td className="py-1.5">💵 Dinheiro</td>
+                        <td className="py-1.5 text-center font-bold">{paymentBreakdown.dinheiro.orders.length}</td>
+                        <td className="py-1.5 text-right font-bold">R$ {paymentBreakdown.dinheiro.total.toFixed(2)}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5">⚡ Pix</td>
+                        <td className="py-1.5 text-center font-bold">{paymentBreakdown.pix.orders.length}</td>
+                        <td className="py-1.5 text-right font-bold">R$ {paymentBreakdown.pix.total.toFixed(2)}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5">💳 Cartão de Débito</td>
+                        <td className="py-1.5 text-center font-bold">{paymentBreakdown.debito.orders.length}</td>
+                        <td className="py-1.5 text-right font-bold">R$ {paymentBreakdown.debito.total.toFixed(2)}</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5">💳 Cartão de Crédito</td>
+                        <td className="py-1.5 text-center font-bold">{paymentBreakdown.credito.orders.length}</td>
+                        <td className="py-1.5 text-right font-bold">R$ {paymentBreakdown.credito.total.toFixed(2)}</td>
+                      </tr>
+                      <tr className="border-t-2 border-slate-300 font-black text-sm">
+                        <td className="py-2">TOTAL FATURADO</td>
+                        <td className="py-2 text-center">{myCompletedToday.length}</td>
+                        <td className="py-2 text-right text-slate-900">R$ {paymentBreakdown.totalFaturado.toFixed(2)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Balanço de Caixa em Dinheiro */}
+                <div className="space-y-2 bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                  <h4 className="font-black text-[11px] uppercase tracking-wider text-slate-500">2. Balanço do Caixa em Espécie</h4>
+                  <div className="space-y-1.5 text-xs font-medium">
+                    <div className="flex justify-between">
+                      <span>(+) Total Recebido em Dinheiro:</span>
+                      <span className="font-bold text-green-700">+ R$ {paymentBreakdown.dinheiro.total.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>(-) Despesas Pagas pelo Entregador:</span>
+                      <span className="font-bold text-red-600">- R$ {totalOpExpensesAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>(-) Baixas Já Repassadas ao Caixa:</span>
+                      <span className="font-bold text-blue-600">- R$ {totalSettledAmount.toFixed(2)}</span>
+                    </div>
+                    <div className="pt-2 border-t border-slate-200 flex justify-between items-center font-black text-sm">
+                      <span>(=) SALDO RESTANTE EM MÃOS:</span>
+                      <span className="text-base text-slate-900">R$ {cashInHand.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Baixas Realizadas */}
+                {cashSettlements.length > 0 && (
+                  <div className="space-y-1.5">
+                    <h4 className="font-black text-[11px] uppercase tracking-wider text-slate-500">3. Baixas Repassadas Hoje</h4>
+                    <div className="divide-y divide-slate-100 text-[11px]">
+                      {cashSettlements.map(e => (
+                        <div key={e.id} className="py-1 flex justify-between">
+                          <span className="text-slate-600">{e.description}</span>
+                          <span className="font-bold text-blue-600">R$ {Number(e.amount).toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Assinaturas */}
+                <div className="pt-6 grid grid-cols-2 gap-6 text-center text-[10px] text-slate-400">
+                  <div className="border-t border-slate-300 pt-1">
+                    <p className="font-bold text-slate-700">{user.name}</p>
+                    <p>Entregador</p>
+                  </div>
+                  <div className="border-t border-slate-300 pt-1">
+                    <p className="font-bold text-slate-700">Responsável pelo Caixa</p>
+                    <p>Conferido / Recebido</p>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================= */}
+      {/* MODAL 1: NOVA VENDA (COM GPS DO CONSUMIDOR RUA)            */}
       {/* ========================================================= */}
       <AnimatePresence>
         {isAddingSale && (
@@ -1236,19 +1478,19 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   </div>
                   <div>
                     <h2 className="text-lg font-black text-white">Nova Venda</h2>
-                    <p className="text-[10px] text-slate-400">Venda direta / consumidor no local</p>
+                    <p className="text-[10px] text-slate-400">Venda presencial com geolocalização</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsAddingSale(false)}
-                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                  className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
               <form onSubmit={handleConfirmNewSale} className="flex-1 overflow-y-auto py-3 space-y-4 pr-1">
-                {/* Tipo de Cliente: Avulso vs Cadastrado */}
+                {/* Tipo de Cliente: Consumidor Rua vs Cadastrado */}
                 <div>
                   <label className="block text-[10px] font-black text-slate-400 uppercase mb-1.5">
                     Destinatário
@@ -1257,7 +1499,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setSaleCustomerType('walkin')}
-                      className={`py-2 rounded-xl text-xs font-black transition-all ${
+                      className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
                         saleCustomerType === 'walkin'
                           ? 'bg-yellow-400 text-slate-950 shadow'
                           : 'text-slate-400'
@@ -1268,7 +1510,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     <button
                       type="button"
                       onClick={() => setSaleCustomerType('existing')}
-                      className={`py-2 rounded-xl text-xs font-black transition-all ${
+                      className={`py-2 rounded-xl text-xs font-black transition-all cursor-pointer ${
                         saleCustomerType === 'existing'
                           ? 'bg-yellow-400 text-slate-950 shadow'
                           : 'text-slate-400'
@@ -1299,7 +1541,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                               key={c.id} 
                               type="button"
                               onClick={() => setSelectedCustomer(c)} 
-                              className="w-full p-2.5 bg-slate-950 hover:bg-slate-800 rounded-xl text-left border border-slate-800/80 hover:border-yellow-400 transition-all flex justify-between items-center"
+                              className="w-full p-2.5 bg-slate-950 hover:bg-slate-800 rounded-xl text-left border border-slate-800/80 hover:border-yellow-400 transition-all flex justify-between items-center cursor-pointer"
                             >
                               <div className="min-w-0 pr-2">
                                 <p className="font-bold text-xs text-white truncate">{c.name}</p>
@@ -1324,7 +1566,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                         <button 
                           type="button" 
                           onClick={() => setSelectedCustomer(null)} 
-                          className="text-xs font-black text-yellow-400 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700"
+                          className="text-xs font-black text-yellow-400 bg-slate-900 px-2.5 py-1 rounded-lg border border-slate-700 cursor-pointer"
                         >
                           TROCAR
                         </button>
@@ -1356,6 +1598,29 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                         onChange={(e) => setWalkinNeighborhood(e.target.value)}
                       />
                     </div>
+
+                    {/* Destaque GPS para o Mapa de Calor */}
+                    <div className="pt-1 flex items-center justify-between bg-slate-900/80 px-2.5 py-2 rounded-xl border border-slate-800">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <MapPin className="w-3.5 h-3.5 text-yellow-400 shrink-0" />
+                        <span className="text-[10px] font-bold text-slate-300 truncate">
+                          {isCapturingGps ? (
+                            'Buscando sinal GPS do local...'
+                          ) : saleGpsCoords ? (
+                            `GPS: ${saleGpsCoords.lat.toFixed(4)}, ${saleGpsCoords.lng.toFixed(4)} (Mapa de Calor OK)`
+                          ) : (
+                            'GPS aguardando sinal...'
+                          )}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={captureFreshGps}
+                        className="text-[10px] font-black text-yellow-400 bg-slate-800 px-2 py-0.5 rounded-lg border border-slate-700 shrink-0 cursor-pointer"
+                      >
+                        Recapturar
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1380,7 +1645,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                             <button 
                               type="button"
                               onClick={() => setCart(prev => ({ ...prev, [p.id]: Math.max(0, (prev[p.id] || 0) - 1) }))}
-                              className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-xs text-slate-300"
+                              className="w-7 h-7 rounded-xl bg-slate-800 hover:bg-slate-700 flex items-center justify-center font-black text-xs text-slate-300 cursor-pointer"
                             >
                               <Minus className="w-3.5 h-3.5" />
                             </button>
@@ -1388,7 +1653,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                             <button 
                               type="button"
                               onClick={() => setCart(prev => ({ ...prev, [p.id]: (prev[p.id] || 0) + 1 }))}
-                              className="w-7 h-7 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center font-black text-xs"
+                              className="w-7 h-7 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 flex items-center justify-center font-black text-xs cursor-pointer"
                             >
                               <Plus className="w-3.5 h-3.5" />
                             </button>
@@ -1410,7 +1675,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                         key={pm}
                         type="button"
                         onClick={() => setSelectedPaymentMethod(pm)}
-                        className={`p-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 border ${
+                        className={`p-2.5 rounded-xl text-xs font-black transition-all flex items-center justify-center gap-1.5 border cursor-pointer ${
                           selectedPaymentMethod === pm
                             ? 'bg-yellow-400 text-slate-950 border-yellow-300 shadow'
                             : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-white'
@@ -1468,7 +1733,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                 </div>
                 <button 
                   onClick={() => setIsAddingExpense(false)}
-                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1483,7 +1748,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                         key={cat}
                         type="button"
                         onClick={() => setExpenseCategory(cat)}
-                        className={`p-2 rounded-xl text-xs font-bold transition-all border ${
+                        className={`p-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
                           expenseCategory === cat
                             ? 'bg-red-500/20 text-red-400 border-red-500/40'
                             : 'bg-slate-950 text-slate-400 border-slate-800'
@@ -1551,12 +1816,12 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   </div>
                   <div>
                     <h2 className="text-base font-black text-white">Baixa de Caixa</h2>
-                    <p className="text-[10px] text-slate-400">Repassar dinheiro físico para o caixa da loja</p>
+                    <p className="text-[10px] text-slate-400">Repassar dinheiro físico para o caixa</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsAddingSettlement(false)}
-                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white"
+                  className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -1575,7 +1840,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                       <button
                         type="button"
                         onClick={() => setSettlementAmount(cashInHand.toFixed(2))}
-                        className="text-[10px] font-black text-yellow-400 hover:underline"
+                        className="text-[10px] font-black text-yellow-400 hover:underline cursor-pointer"
                       >
                         Baixar Tudo
                       </button>
@@ -1592,12 +1857,62 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                   />
                 </div>
 
+                {/* Seleção rápida de "Entregue a quem?" (Gestor / Caixa) */}
                 <div>
-                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Entregue a quem?</label>
+                  <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">
+                    Entregue a quem? (Selecione ou digite)
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setSettlementRecipient('Gestor')}
+                      className={`p-2 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-1.5 cursor-pointer ${
+                        settlementRecipient.toLowerCase().includes('gestor')
+                          ? 'bg-blue-600 text-white border-blue-400 shadow'
+                          : 'bg-slate-950 text-slate-300 border-slate-800'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5 text-yellow-400" />
+                      <span>👤 Gestor</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSettlementRecipient('Caixa da Loja')}
+                      className={`p-2 rounded-xl text-xs font-bold transition-all border flex items-center justify-center gap-1.5 cursor-pointer ${
+                        settlementRecipient.toLowerCase().includes('caixa')
+                          ? 'bg-blue-600 text-white border-blue-400 shadow'
+                          : 'bg-slate-950 text-slate-300 border-slate-800'
+                      }`}
+                    >
+                      <Building2 className="w-3.5 h-3.5 text-blue-400" />
+                      <span>🏢 Caixa da Loja</span>
+                    </button>
+                  </div>
+
+                  {managerOptions.length > 0 && managerOptions[0] !== 'Gestor Responsável' && (
+                    <div className="flex flex-wrap gap-1.5 mb-2">
+                      {managerOptions.map(name => (
+                        <button
+                          key={name}
+                          type="button"
+                          onClick={() => setSettlementRecipient(name)}
+                          className={`text-[10px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer ${
+                            settlementRecipient === name
+                              ? 'bg-blue-500/20 text-blue-400 border-blue-400'
+                              : 'bg-slate-950 text-slate-400 border-slate-800'
+                          }`}
+                        >
+                          {name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
                   <input
                     type="text"
-                    placeholder="Ex: Carlos (Gestor), Caixa da Distribuidora"
-                    className="w-full p-3 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-blue-400 outline-none"
+                    placeholder="Outro nome ou observação de quem recebeu..."
+                    className="w-full p-2.5 bg-slate-950 rounded-xl text-xs text-white border border-slate-800 focus:border-blue-400 outline-none"
                     value={settlementRecipient}
                     onChange={(e) => setSettlementRecipient(e.target.value)}
                   />

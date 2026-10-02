@@ -37,7 +37,9 @@ import {
   LogOut,
   RotateCw,
   Store,
-  Building2
+  Building2,
+  Banknote,
+  Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { MapContainer, TileLayer, Marker, Popup, GeoJSON, useMap } from 'react-leaflet';
@@ -52,7 +54,9 @@ import { BusinessSettingsTab } from './BusinessSettingsTab';
 import { DEFAULT_BUSINESS_INFO, DEFAULT_DELIVERY_PERIODS } from '../services/businessService';
 import { DashboardMetricsTab } from './manager/DashboardMetricsTab';
 import { PredictionsCRMTab } from './manager/PredictionsCRMTab';
+import { ProductsTab } from './manager/ProductsTab';
 import { PRODUCTS } from '../constants';
+import { Product } from '../types';
 
 // Fix Leaflet default icon issue
 let DefaultIcon = L.icon({
@@ -172,6 +176,18 @@ interface ManagerDashboardProps {
   onRefreshData?: () => void;
   businessInfo?: BusinessInfo;
   onUpdateBusinessInfo?: (info: BusinessInfo) => Promise<void> | void;
+  products?: Product[];
+  onAddProduct?: (product: Product) => Promise<void> | void;
+  onUpdateProduct?: (product: Product) => Promise<void> | void;
+  onDeleteProduct?: (productId: string) => Promise<void> | void;
+  onUpdateProductPrice?: (
+    productId: string, 
+    newPrice: number, 
+    pixDiscountValue?: number, 
+    cashDiscountValue?: number,
+    pixType?: 'fixed' | 'percentage',
+    cashType?: 'fixed' | 'percentage'
+  ) => Promise<void> | void;
 }
 
 const CoverageMapController: React.FC<{
@@ -256,9 +272,15 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   onLogout,
   onRefreshData,
   businessInfo = DEFAULT_BUSINESS_INFO,
-  onUpdateBusinessInfo
+  onUpdateBusinessInfo,
+  products = [],
+  onAddProduct,
+  onUpdateProduct,
+  onDeleteProduct,
+  onUpdateProductPrice
 }) => {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators' | 'meu_negocio'>('tracking');
+  const productsList = (products && products.length > 0) ? products : PRODUCTS;
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'tracking' | 'orders' | 'map' | 'coverage' | 'benefits' | 'predictions' | 'collaborators' | 'meu_negocio' | 'produtos'>('tracking');
   const [statusFilter, setStatusFilter] = useState<OrderStatus | 'Todos' | 'Avaliados'>('Todos');
   const [selectedOrderDetails, setSelectedOrderDetails] = useState<Order | null>(null);
   const [cancellingOrder, setCancellingOrder] = useState<Order | null>(null);
@@ -616,7 +638,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
   );
 
   const cartTotal = Object.entries(cart).reduce((acc, [id, qty]) => {
-    const product = PRODUCTS.find(p => p.id === id);
+    const product = productsList.find(p => p.id === id);
     return acc + (product?.price || 0) * (qty as number);
   }, 0);
 
@@ -631,7 +653,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       items: Object.entries(cart).map(([id, qty]) => ({
         productId: id,
         quantity: qty as number,
-        priceAtTime: PRODUCTS.find(p => p.id === id)?.price || 0
+        priceAtTime: productsList.find(p => p.id === id)?.price || 0
       })),
       total: cartTotal,
       paymentMethod: 'Dinheiro',
@@ -949,6 +971,22 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
           )}
           {user.role === 'gestor' && (
             <button 
+              onClick={() => setActiveTab('caixa')} 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'caixa' ? 'bg-yellow-400 text-slate-900' : 'text-slate-400 hover:bg-slate-800'}`}
+            >
+              <Banknote className="w-5 h-5" /> Fluxo de Caixa
+            </button>
+          )}
+          {user.role === 'gestor' && (
+            <button 
+              onClick={() => setActiveTab('produtos')} 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'produtos' ? 'bg-yellow-400 text-slate-900' : 'text-slate-400 hover:bg-slate-800'}`}
+            >
+              <Package className="w-5 h-5" /> Produtos
+            </button>
+          )}
+          {user.role === 'gestor' && (
+            <button 
               onClick={() => setActiveTab('meu_negocio')} 
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${activeTab === 'meu_negocio' ? 'bg-yellow-400 text-slate-900' : 'text-slate-400 hover:bg-slate-800'}`}
             >
@@ -991,12 +1029,14 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             {(user.role === 'gestor' || user.allowedTabs?.includes('map')) && <button onClick={() => setActiveTab('map')} className={`p-2 rounded-xl transition-all ${activeTab === 'map' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Monitoramento"><MapIcon className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('coverage')) && <button onClick={() => setActiveTab('coverage')} className={`p-2 rounded-xl transition-all ${activeTab === 'coverage' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Cobertura"><MapPin className="w-5 h-5" /></button>}
             {user.role === 'gestor' && <button onClick={() => setActiveTab('collaborators')} className={`p-2 rounded-xl transition-all ${activeTab === 'collaborators' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Colaboradores"><Users className="w-5 h-5" /></button>}
+            {user.role === 'gestor' && <button onClick={() => setActiveTab('caixa')} className={`p-2 rounded-xl transition-all ${activeTab === 'caixa' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Fluxo de Caixa"><Banknote className="w-5 h-5" /></button>}
+            {user.role === 'gestor' && <button onClick={() => setActiveTab('produtos')} className={`p-2 rounded-xl transition-all ${activeTab === 'produtos' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Produtos"><Package className="w-5 h-5" /></button>}
             {user.role === 'gestor' && <button onClick={() => setActiveTab('meu_negocio')} className={`p-2 rounded-xl transition-all ${activeTab === 'meu_negocio' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Meu Negócio"><Store className="w-5 h-5" /></button>}
           </div>
         </div>
 
-        <div className={(activeTab === 'dashboard' || activeTab === 'benefits') ? "p-3 lg:px-6 lg:py-2.5 w-full" : "p-6 lg:p-10 max-w-6xl mx-auto"}>
-          {activeTab !== 'dashboard' && activeTab !== 'benefits' && (
+        <div className={(activeTab === 'dashboard' || activeTab === 'benefits' || activeTab === 'produtos') ? "p-3 lg:px-6 lg:py-2.5 w-full max-w-6xl mx-auto" : "p-6 lg:p-10 max-w-6xl mx-auto"}>
+          {activeTab !== 'dashboard' && activeTab !== 'benefits' && activeTab !== 'produtos' && (
             <header className="hidden md:flex items-center justify-between mb-10">
               <div>
                 <h2 className="text-3xl font-black text-slate-900">
@@ -1006,10 +1046,11 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   {activeTab === 'coverage' && "Área de Cobertura"}
                   {activeTab === 'predictions' && "Previsão de Consumo"}
                   {activeTab === 'collaborators' && "Gestão de Colaboradores"}
+                  {activeTab === 'caixa' && "Controle de Caixa & Prestações de Contas"}
                   {activeTab === 'meu_negocio' && "Meu Negócio & Estabelecimento"}
                 </h2>
                 <p className="text-slate-500 font-medium">
-                  {activeTab === 'meu_negocio' ? "Gerencie horários de atendimento, logotipo e dados da sua empresa." : "Acompanhe o desempenho da sua revenda em tempo real."}
+                  {activeTab === 'caixa' ? "Acompanhe entradas em dinheiro, prestações dos entregadores e saldo do caixa central." : activeTab === 'meu_negocio' ? "Gerencie horários de atendimento, logotipo e dados da sua empresa." : "Acompanhe o desempenho da sua revenda em tempo real."}
                 </p>
               </div>
             </header>
@@ -1165,7 +1206,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         const elapsed = getElapsedMinutes(o.createdAt);
                         const ordersCount = getCustomerOrdersCount(o.customerId, o.phone);
                         const itemsSummary = o.items.map(it => {
-                          const p = PRODUCTS.find(pr => pr.id === it.productId);
+                          const p = productsList.find(pr => pr.id === it.productId);
                           return `${it.quantity}x ${p?.name || 'Item'}`;
                         }).join(' + ');
 
@@ -1274,7 +1315,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         const elapsed = getElapsedMinutes(o.createdAt);
                         const ordersCount = getCustomerOrdersCount(o.customerId, o.phone);
                         const itemsSummary = o.items.map(it => {
-                          const p = PRODUCTS.find(pr => pr.id === it.productId);
+                          const p = productsList.find(pr => pr.id === it.productId);
                           return `${it.quantity}x ${p?.name || 'Item'}`;
                         }).join(' + ');
                         const dpName = deliveryPersons.find(dp => dp.id === o.deliveryPersonId)?.name || 'Entregador';
@@ -1380,7 +1421,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         const elapsed = getElapsedMinutes(o.createdAt);
                         const ordersCount = getCustomerOrdersCount(o.customerId, o.phone);
                         const itemsSummary = o.items.map(it => {
-                          const p = PRODUCTS.find(pr => pr.id === it.productId);
+                          const p = productsList.find(pr => pr.id === it.productId);
                           return `${it.quantity}x ${p?.name || 'Item'}`;
                         }).join(' + ');
                         const dpName = deliveryPersons.find(dp => dp.id === o.deliveryPersonId)?.name || 'Entregador';
@@ -1661,7 +1702,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         <div className="pt-3 border-t border-slate-50 flex items-center justify-between text-xs text-slate-500">
                           <span className="font-medium truncate max-w-[280px]">
                             {o.items.map(it => {
-                              const p = PRODUCTS.find(pr => pr.id === it.productId);
+                              const p = productsList.find(pr => pr.id === it.productId);
                               return `${it.quantity}x ${p?.name || 'Item'}`;
                             }).join(', ')}
                           </span>
@@ -2291,7 +2332,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                             {reward.productId && (
                               <p className="text-emerald-700 font-bold flex items-center gap-1">
                                 <Package className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                <span>Produto: {PRODUCTS.find(p => p.id === reward.productId)?.name || reward.productId}</span>
+                                <span>Produto: {productsList.find(p => p.id === reward.productId)?.name || reward.productId}</span>
                               </p>
                             )}
                             {reward.value && <p><strong>Benefício:</strong> R$ {reward.value.toFixed(2)}</p>}
@@ -2582,6 +2623,18 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
             </motion.div>
           )}
 
+          {activeTab === 'produtos' && (
+            <motion.div key="produtos" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
+              <ProductsTab 
+                products={productsList}
+                onAddProduct={onAddProduct || (async () => {})}
+                onUpdateProduct={onUpdateProduct || (async () => {})}
+                onDeleteProduct={onDeleteProduct || (async () => {})}
+                onUpdateProductPrice={onUpdateProductPrice || (async () => {})}
+              />
+            </motion.div>
+          )}
+
           {activeTab === 'meu_negocio' && (
             <motion.div key="meu_negocio" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }}>
               <BusinessSettingsTab 
@@ -2590,6 +2643,176 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
               />
             </motion.div>
           )}
+
+          {activeTab === 'caixa' && (() => {
+            const todayStr = new Date().toDateString();
+            const todayCompletedOrders = orders.filter(o => {
+              if (o.status !== 'Concluído') return false;
+              const d = new Date(o.completedAt || o.createdAt);
+              return d.toDateString() === todayStr;
+            });
+            const todayCashOrders = todayCompletedOrders.filter(o => (o.paymentMethod || '').toLowerCase().includes('dinheiro'));
+            const totalDinheiroVendasHoje = todayCashOrders.reduce((acc, o) => acc + (o.total || 0), 0);
+
+            const todayExpenses = expenses.filter(e => new Date(e.date).toDateString() === todayStr);
+            const todaySettlements = todayExpenses.filter(e => 
+              e.category === 'Prestação de Contas' || 
+              e.category === 'Baixa de Caixa' || 
+              e.description.toLowerCase().includes('baixa') || 
+              e.description.toLowerCase().includes('prestação') || 
+              e.description.toLowerCase().includes('prestacao')
+            );
+            const todayOpExpenses = todayExpenses.filter(e => !todaySettlements.includes(e));
+
+            const totalBaixasRecebidasHoje = todaySettlements.reduce((acc, e) => acc + (e.amount || 0), 0);
+            const totalOpExpensesHoje = todayOpExpenses.reduce((acc, e) => acc + (e.amount || 0), 0);
+            const saldoPendenteComEntregadores = Math.max(0, totalDinheiroVendasHoje - totalOpExpensesHoje - totalBaixasRecebidasHoje);
+
+            return (
+              <motion.div key="caixa" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} className="space-y-6">
+                {/* 4 Cards de Métricas do Caixa */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                    <div className="p-3 bg-green-50 text-green-600 rounded-2xl">
+                      <Banknote className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase">Vendas Dinheiro Hoje</p>
+                      <p className="text-xl font-black text-slate-900">R$ {totalDinheiroVendasHoje.toFixed(2)}</p>
+                      <span className="text-[10px] text-slate-500 font-medium">{todayCashOrders.length} pedidos</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                    <div className="p-3 bg-blue-50 text-blue-600 rounded-2xl">
+                      <Building2 className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase">Baixas Recebidas</p>
+                      <p className="text-xl font-black text-blue-600">R$ {totalBaixasRecebidasHoje.toFixed(2)}</p>
+                      <span className="text-[10px] text-slate-500 font-medium">{todaySettlements.length} repasses</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                    <div className="p-3 bg-red-50 text-red-600 rounded-2xl">
+                      <ArrowDownRight className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase">Despesas Operacionais</p>
+                      <p className="text-xl font-black text-red-500">- R$ {totalOpExpensesHoje.toFixed(2)}</p>
+                      <span className="text-[10px] text-slate-500 font-medium">{todayOpExpenses.length} lançamentos</span>
+                    </div>
+                  </div>
+
+                  <div className="bg-white p-5 rounded-3xl shadow-sm border border-slate-100 flex items-center gap-4">
+                    <div className="p-3 bg-yellow-50 text-yellow-600 rounded-2xl">
+                      <Wallet className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase">Pendente com Entregadores</p>
+                      <p className="text-xl font-black text-amber-600">R$ {saldoPendenteComEntregadores.toFixed(2)}</p>
+                      <span className="text-[10px] text-slate-500 font-medium">A prestar contas</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Painel por Entregador (Auditoria de Caixa) */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                  <h3 className="font-black text-lg mb-4 text-slate-900 flex items-center gap-2">
+                    <Truck className="w-5 h-5 text-yellow-500" />
+                    Prestações de Contas por Entregador
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {deliveryPersons.map(dp => {
+                      const dpCashOrders = todayCashOrders.filter(o => o.deliveryPersonId === dp.id);
+                      const dpCashTotal = dpCashOrders.reduce((acc, o) => acc + (o.total || 0), 0);
+                      const dpSettlements = todaySettlements.filter(e => e.userId === dp.id);
+                      const dpSettledTotal = dpSettlements.reduce((acc, e) => acc + (e.amount || 0), 0);
+                      const dpExpenses = todayOpExpenses.filter(e => e.userId === dp.id);
+                      const dpExpensesTotal = dpExpenses.reduce((acc, e) => acc + (e.amount || 0), 0);
+                      const dpInHand = Math.max(0, dpCashTotal - dpExpensesTotal - dpSettledTotal);
+
+                      return (
+                        <div key={dp.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-9 h-9 bg-yellow-400 text-slate-900 rounded-full flex items-center justify-center font-black text-xs">
+                                🛵
+                              </div>
+                              <div>
+                                <p className="font-bold text-sm text-slate-900 leading-tight">{dp.name}</p>
+                                <p className="text-[10px] text-slate-500">{dp.phone || 'Sem telefone'}</p>
+                              </div>
+                            </div>
+                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                              dpInHand <= 0 ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-800'
+                            }`}>
+                              {dpInHand <= 0 ? 'Quitado' : 'A Acertar'}
+                            </span>
+                          </div>
+
+                          <div className="bg-white p-3 rounded-xl border border-slate-200/60 space-y-1 text-xs">
+                            <div className="flex justify-between text-slate-600">
+                              <span>Vendas em Dinheiro:</span>
+                              <span className="font-bold text-slate-900">R$ {dpCashTotal.toFixed(2)} ({dpCashOrders.length}x)</span>
+                            </div>
+                            <div className="flex justify-between text-slate-600">
+                              <span>Despesas Pagas:</span>
+                              <span className="font-bold text-red-500">- R$ {dpExpensesTotal.toFixed(2)}</span>
+                            </div>
+                            <div className="flex justify-between text-slate-600">
+                              <span>Baixas Repassadas:</span>
+                              <span className="font-bold text-blue-600">- R$ {dpSettledTotal.toFixed(2)}</span>
+                            </div>
+                            <div className="pt-2 border-t border-slate-100 flex justify-between items-center text-sm">
+                              <span className="font-bold text-slate-700">Saldo em Mãos:</span>
+                              <span className={`font-black ${dpInHand > 0 ? 'text-amber-600 text-base' : 'text-green-600'}`}>
+                                R$ {dpInHand.toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Extrato de Baixas & Despesas do Dia */}
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+                  <h3 className="font-black text-lg mb-4 text-slate-900 flex items-center gap-2">
+                    <History className="w-5 h-5 text-blue-500" />
+                    Extrato de Repasses e Baixas do Dia
+                  </h3>
+                  {todaySettlements.length === 0 ? (
+                    <p className="text-center py-8 text-slate-400 text-sm">Nenhuma baixa de caixa registrada hoje.</p>
+                  ) : (
+                    <div className="divide-y divide-slate-100">
+                      {todaySettlements.map(e => {
+                        const dp = deliveryPersons.find(d => d.id === e.userId);
+                        return (
+                          <div key={e.id} className="py-3 flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+                                <Banknote className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <p className="font-bold text-sm text-slate-900">{e.description}</p>
+                                <p className="text-xs text-slate-400">
+                                  Entregador: <span className="font-bold text-slate-600">{dp?.name || 'Entregador'}</span> • {new Date(e.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                </p>
+                              </div>
+                            </div>
+                            <span className="text-base font-black text-blue-600">+ R$ {e.amount.toFixed(2)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            );
+          })()}
         </AnimatePresence>
       </div>
     </main>
@@ -2647,7 +2870,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {PRODUCTS.map(p => (
+                      {productsList.filter(p => p.isActive !== false).map(p => (
                         <div key={p.id} className="bg-white p-4 rounded-2xl flex items-center gap-4 border border-slate-100 shadow-sm">
                           <img src={p.image} className="w-14 h-14 rounded-xl object-cover" referrerPolicy="no-referrer" />
                           <div className="flex-1">
@@ -2855,12 +3078,12 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       value={rewardForm.productId}
                       onChange={(e) => {
                         const prodId = e.target.value;
-                        const prod = PRODUCTS.find(p => p.id === prodId);
+                        const prod = productsList.find(p => p.id === prodId);
                         if (prod) {
                           const multiplier = benefitsConfig?.pointsPerCurrency || 10;
                           const suggestedPoints = Math.round(prod.price * multiplier);
-                          const shouldUpdateTitle = !rewardForm.title.trim() || PRODUCTS.some(p => rewardForm.title.includes(p.name));
-                          const shouldUpdateDesc = !rewardForm.description.trim() || PRODUCTS.some(p => rewardForm.description.includes(p.name));
+                          const shouldUpdateTitle = !rewardForm.title.trim() || productsList.some(p => rewardForm.title.includes(p.name));
+                          const shouldUpdateDesc = !rewardForm.description.trim() || productsList.some(p => rewardForm.description.includes(p.name));
                           setRewardForm({
                             ...rewardForm,
                             productId: prodId,
@@ -2878,7 +3101,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                       }}
                     >
                       <option value="">Nenhum / Brinde Avulso (Não adiciona ao carrinho)</option>
-                      {PRODUCTS.map(p => (
+                      {productsList.map(p => (
                         <option key={p.id} value={p.id}>
                           {p.name} — R$ {p.price.toFixed(2)}
                         </option>
@@ -2887,7 +3110,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                     {rewardForm.productId ? (
                       <div className="flex items-center gap-1.5 text-[11px] text-amber-900 font-bold bg-amber-100/70 p-2 rounded-lg">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                        <span>Produto vinculado! Valor ajustado para R$ {PRODUCTS.find(p => p.id === rewardForm.productId)?.price.toFixed(2)} e pontuação sugerida: {rewardForm.pointsCost} pts.</span>
+                        <span>Produto vinculado! Valor ajustado para R$ {productsList.find(p => p.id === rewardForm.productId)?.price.toFixed(2)} e pontuação sugerida: {rewardForm.pointsCost} pts.</span>
                       </div>
                     ) : (
                       <p className="text-[10px] text-amber-700 font-medium">
@@ -3389,7 +3612,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
 
                     <div className="bg-white rounded-xl p-3.5 border border-slate-200/70 space-y-2 text-xs">
                       {o.items.map((it, idx) => {
-                        const prod = PRODUCTS.find(p => p.id === it.productId);
+                        const prod = productsList.find(p => p.id === it.productId);
                         return (
                           <div key={idx} className="flex justify-between items-center font-bold text-slate-800">
                             <span>{it.quantity}x {prod?.name || 'Produto'}</span>
@@ -3536,7 +3759,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                               const dateFormatted = new Date(histOrder.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: '2-digit' });
                               const totalItemsQty = histOrder.items.reduce((acc, it) => acc + it.quantity, 0);
                               const itemsDesc = histOrder.items.map(it => {
-                                const prod = PRODUCTS.find(p => p.id === it.productId);
+                                const prod = productsList.find(p => p.id === it.productId);
                                 return `${it.quantity}x ${prod?.name || 'Item'}`;
                               }).join(', ');
 
@@ -3851,7 +4074,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                         <div className="mt-2 flex gap-2">
                           {order.items.map((item, idx) => (
                             <span key={idx} className="text-[10px] font-black bg-yellow-100 text-yellow-700 px-2 py-1 rounded-lg">
-                              {item.quantity}x {PRODUCTS.find(p => p.id === item.productId)?.name}
+                              {item.quantity}x {productsList.find(p => p.id === item.productId)?.name}
                             </span>
                           ))}
                         </div>
@@ -4209,7 +4432,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             {periodOrders.map(o => {
                               const itemsSummary = o.items.map(it => {
-                                const p = PRODUCTS.find(pr => pr.id === it.productId);
+                                const p = productsList.find(pr => pr.id === it.productId);
                                 return `${it.quantity}x ${p?.name || 'Item'}`;
                               }).join(' + ');
 
