@@ -24,7 +24,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { Product } from '../../types';
-import { PRODUCT_CATEGORIES, PRODUCT_PRESETS, calculateEffectivePrice, DEFAULT_PRODUCT_IMAGES } from '../../constants';
+import { PRODUCT_CATEGORIES, PRODUCT_PRESETS, calculateEffectivePrice, DEFAULT_PRODUCT_IMAGES, formatProductPrice } from '../../constants';
 import { QuickPriceEditModal } from './QuickPriceEditModal';
 
 interface ProductsTabProps {
@@ -652,7 +652,7 @@ export const ProductsTab: React.FC<ProductsTabProps> = ({
 
                       <div className="flex items-baseline gap-2">
                         <span className="text-2xl font-black text-slate-900 group-hover/price:text-yellow-600">
-                          R$ {p.price.toFixed(2)}
+                          {formatProductPrice(p.price)}
                         </span>
                         <span className="text-[11px] font-bold text-slate-400">padrão</span>
                       </div>

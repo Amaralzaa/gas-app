@@ -21,7 +21,7 @@ export const DEFAULT_PRODUCT_IMAGES: Record<string, string> = {
   suporte_agua: 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?w=600&auto=format&fit=crop&q=80'
 };
 
-export const PRODUCT_PRESETS: Product[] = [
+const RAW_PRODUCT_PRESETS: Product[] = [
   {
     id: 'p13',
     name: 'Gás de Cozinha P13 (Recarga)',
@@ -255,11 +255,30 @@ export const PRODUCT_PRESETS: Product[] = [
   }
 ];
 
-export const PRODUCTS: Product[] = [
-  PRODUCT_PRESETS[0], // P13 Recarga
-  PRODUCT_PRESETS[2], // P45
-  PRODUCT_PRESETS[5]  // Água 20L Recarga
-];
+/** Preço 0 = ainda não definido pelo gestor. Não usar os valores antigos de demonstração. */
+function semPrecoDefinido(p: Product): Product {
+  return {
+    ...p,
+    price: 0,
+    pixDiscount: { enabled: false, type: 'fixed', value: 0 },
+    cashDiscount: { enabled: false, type: 'fixed', value: 0 },
+  };
+}
+
+export const PRODUCT_PRESETS: Product[] = RAW_PRODUCT_PRESETS.map(semPrecoDefinido);
+
+export const PRODUCTS: Product[] = ['p13', 'p20', 'p45']
+  .map((id) => PRODUCT_PRESETS.find((p) => p.id === id))
+  .filter((p): p is Product => Boolean(p));
+
+export function isPriceDefined(price: number | null | undefined): boolean {
+  return typeof price === 'number' && Number.isFinite(price) && price > 0;
+}
+
+export function formatProductPrice(price: number | null | undefined): string {
+  if (!isPriceDefined(price)) return 'Definir preço';
+  return `R$ ${Number(price).toFixed(2)}`;
+}
 
 /**
  * Calcula o preço efetivo considerando a forma de pagamento e descontos cadastrados

@@ -297,8 +297,8 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
             </div>
 
             {/* Campos de texto */}
-            <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="sm:col-span-2 bg-yellow-50/50 p-4 rounded-2xl border border-yellow-200/80">
+            <div className="flex-1 w-full grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="lg:col-span-2 bg-yellow-50/50 p-4 rounded-2xl border border-yellow-200/80">
                 <label className="block text-xs font-black text-slate-800 uppercase mb-1 flex flex-wrap items-center justify-between gap-1">
                   <span>Nome do Estabelecimento / Marca Principal</span>
                   <span className="text-[10px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full border border-amber-300">
@@ -360,7 +360,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
             <Phone className="w-5 h-5 text-yellow-500" /> Contatos de Atendimento
           </h2>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">WhatsApp de Pedidos</label>
               <input
@@ -386,14 +386,45 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
           </div>
         </div>
 
+        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
+          <h2 className="text-lg font-black text-slate-900">Taxas (só cobra o que você definir)</h2>
+          <p className="text-xs text-slate-500">Deixe em branco enquanto o valor ainda não foi decidido. Zero significa que a loja definiu que não há cobrança.</p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Taxa de entrega (R$)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.deliveryFee ?? ''}
+                onChange={(e) => setForm(f => ({ ...f, deliveryFee: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                className="w-full p-3.5 bg-slate-50 rounded-2xl border border-slate-200 focus:border-yellow-400 outline-none text-sm font-bold"
+                placeholder="definir"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Pedido mínimo (R$)</label>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.minOrderValue ?? ''}
+                onChange={(e) => setForm(f => ({ ...f, minOrderValue: e.target.value === '' ? undefined : Number(e.target.value) }))}
+                className="w-full p-3.5 bg-slate-50 rounded-2xl border border-slate-200 focus:border-yellow-400 outline-none text-sm font-bold"
+                placeholder="definir"
+              />
+            </div>
+          </div>
+        </div>
+
         {/* Card 3: Endereço do Estabelecimento */}
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
           <h2 className="text-lg font-black text-slate-900 flex items-center gap-2">
             <MapPin className="w-5 h-5 text-yellow-500" /> Endereço da Base Operacional
           </h2>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="sm:col-span-2">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="lg:col-span-2">
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Rua / Logradouro</label>
               <input
                 type="text"
@@ -461,7 +492,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 pt-2">
             <button
               type="button"
               onClick={() => setForm(f => ({ ...f, isOpenOverride: null }))}

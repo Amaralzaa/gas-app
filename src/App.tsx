@@ -86,10 +86,12 @@ const LoginView = ({
         try {
           authUser = await authService.login(email, password);
         } catch (authErr: any) {
-          const found = MOCK_USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
-          if (found) {
-            onLogin(found);
-            return;
+          if (import.meta.env.DEV) {
+            const found = MOCK_USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
+            if (found) {
+              onLogin(found);
+              return;
+            }
           }
           throw authErr;
         }
@@ -116,7 +118,7 @@ const LoginView = ({
         const immediateUser: AppUser = {
           id: authUser.id,
           email: authUser.email || '',
-          role: (authUser.user_metadata?.role as UserRole) || (loginMethod === 'phone' ? 'cliente' : 'gestor'),
+          role: 'cliente',
           name: (localName && localName.trim()) || authUser.user_metadata?.name || (loginMethod === 'phone' ? 'Cliente' : 'Usuário'),
           phone: cleanPhone || authUser.user_metadata?.phone,
           points: 0,
@@ -146,7 +148,7 @@ const LoginView = ({
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8"
+        className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-8"
       >
         <div className="text-center mb-8">
           {businessInfo?.logoUrl ? (
@@ -181,7 +183,7 @@ const LoginView = ({
             onClick={() => setLoginMethod('email')}
             className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
           >
-            SOU GESTOR
+            EQUIPE
           </button>
         </div>
 
@@ -209,6 +211,7 @@ const LoginView = ({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
+                <p className="text-[10px] text-slate-400 mt-2 ml-1">Gestor e entregador entram com e-mail e senha. O papel vem do cadastro, não deste botão.</p>
               </div>
             </>
           ) : (
@@ -218,11 +221,11 @@ const LoginView = ({
                 required
                 type="tel" 
                 className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
-                placeholder="(11) 99999-9999"
+                placeholder="(21) 99999-9999"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
               />
-              <p className="text-[10px] text-slate-400 mt-2 ml-1">Enviaremos você direto para o cardápio se já tiver cadastro.</p>
+              <p className="text-[10px] text-slate-400 mt-2 ml-1">Cliente entra com o WhatsApp. Se já tiver cadastro, vai direto ao cardápio.</p>
             </div>
           )}
 
@@ -238,6 +241,7 @@ const LoginView = ({
             {loading ? 'CARREGANDO...' : 'ENTRAR NO APLICATIVO'}
           </button>
 
+          {import.meta.env.DEV && (
           <div className="pt-4 border-t border-slate-100 text-center">
             <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Acesso Rápido para Demonstração</p>
             <div className="grid grid-cols-3 gap-2">
@@ -273,6 +277,7 @@ const LoginView = ({
               </button>
             </div>
           </div>
+          )}
         </form>
       </motion.div>
     </div>
@@ -308,7 +313,7 @@ const Header = ({
           </div>
         )}
         <div className="min-w-0">
-          <h2 className="text-sm sm:text-base font-black leading-tight uppercase tracking-tight truncate max-w-[180px] sm:max-w-xs md:max-w-md">
+          <h2 className="text-sm sm:text-base font-black leading-tight uppercase tracking-tight truncate">
             {companyName}
           </h2>
           <p className="text-[10px] text-yellow-400 font-bold uppercase tracking-wider">
@@ -520,7 +525,7 @@ export default function App() {
               const minimalUser: AppUser = {
                 id: session.user.id,
                 email: session.user.email,
-                role: (session.user.user_metadata?.role as any) || 'cliente',
+                role: 'cliente',
                 name: session.user.user_metadata?.name || 'Usuário',
                 phone: session.user.user_metadata?.phone,
                 points: 0,
@@ -612,7 +617,8 @@ export default function App() {
         });
         localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses || []));
 
-        const rawUsers = fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS;
+        const demoSession = import.meta.env.DEV && !!currentUser && MOCK_USERS.some(u => u.id === currentUser.id);
+        const rawUsers = fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : (demoSession ? MOCK_USERS : []);
         const usersWithReferral = rawUsers.map(u => ({
           ...u,
           referralCode: u.referralCode || codeService.getUserReferralCode(u)
@@ -790,7 +796,11 @@ export default function App() {
     });
 
     try {
+      const { data: sessionData } = await supabase.auth.getSession();
       const dbCreated = await orderService.createOrder(localCreated);
+      if (!dbCreated && sessionData.session) {
+        throw new Error('O pedido não foi gravado.');
+      }
       if (dbCreated && dbCreated.id && dbCreated.id !== localCreated.id) {
         setOrders(prev => {
           const synced = prev.map(o => o.id === localCreated.id ? dbCreated : o);
@@ -801,12 +811,18 @@ export default function App() {
         });
       }
     } catch (err: any) {
-      console.warn('Sincronização offline: pedido salvo no banco local compartilhado.', err);
+      const { data: sessionData } = await supabase.auth.getSession();
+      if (sessionData.session) {
+        console.error('Falha ao gravar pedido:', err);
+        setOrders(prev => prev.filter(o => o.id !== localCreated.id));
+        throw err;
+      }
+      console.warn('Sem sessão: pedido ficou só neste aparelho.', err);
     }
 
     // Se o pedido já nasce como 'Concluído' (venda presencial do entregador), credita pontos ao cliente
     if (localCreated.status === 'Concluído') {
-      const multiplier = benefitsConfig?.pointsPerCurrency ?? 10;
+      const multiplier = benefitsConfig?.pointsPerCurrency ?? 0;
       const earnedPoints = Math.floor(localCreated.total * multiplier);
       const cleanOrderPhone = (localCreated.phone || '').replace(/\D/g, '');
       const customer = allUsers.find(u => 
@@ -862,7 +878,7 @@ export default function App() {
 
     // REGRA DE PONTOS: Concedidos exclusivamente quando o pedido atinge status Concluído!
     if (isNowCompleted) {
-      const multiplier = benefitsConfig?.pointsPerCurrency ?? 10;
+      const multiplier = benefitsConfig?.pointsPerCurrency ?? 0;
       const earnedPoints = Math.floor(updatedOrder.total * multiplier);
 
       // 1. Creditar pontos na conta do cliente da compra
@@ -1185,7 +1201,7 @@ export default function App() {
             <motion.div key="entregador" className="h-full w-full overflow-hidden flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
               <DeliveryDashboard 
                 user={currentUser} 
-                orders={orders.filter(o => o.deliveryPersonId === currentUser.id)} 
+                orders={orders.filter(o => o.deliveryPersonId === currentUser.id || (!o.deliveryPersonId && o.status === 'Pendente'))} 
                 onUpdateOrder={handleUpdateOrder} 
                 onAddOrder={handleOrderCreated}
                 onAddExpense={handleAddExpense}

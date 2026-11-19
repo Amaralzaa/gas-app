@@ -39,7 +39,7 @@ import { MapContainer, TileLayer, GeoJSON, Marker, Popup, Polyline, useMap } fro
 import L from 'leaflet';
 import { createCirclePolygon, haversineKm, estimateMinutes, fetchOsrmRoute } from '../utils/geoUtils';
 import { AppUser, Order, Address, Product, CoverageArea, Coupon, Reward, Referral, PointHistoryItem, BenefitsConfig, BusinessInfo, DeliveryPeriod, RedeemedReward, OpeningHours, DayHours } from '../types';
-import { PRODUCTS, calculateEffectivePrice } from '../constants';
+import { PRODUCTS, calculateEffectivePrice, formatProductPrice, isPriceDefined } from '../constants';
 import { businessService, DEFAULT_DELIVERY_PERIODS, DEFAULT_BUSINESS_INFO } from '../services/businessService';
 import { userService } from '../services/userService';
 import { codeService } from '../services/codeService';
@@ -1073,7 +1073,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
         return;
       }
 
-      const discountAmount = benefitsConfig?.referralDiscountValue ?? 10;
+      const discountAmount = benefitsConfig?.referralDiscountValue ?? 0;
       const referralCoupon: Coupon = {
         id: `REF-${referrer.id}`,
         code: pendingCode.toUpperCase(),
@@ -1417,10 +1417,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   ) : 0;
 
   const discountValue = couponDiscountValue + paymentMethodDiscount;
-  const cartTotal = Math.max(0, cartSubtotal - discountValue);
+  const deliveryFeeAmount = businessInfo?.deliveryFee && businessInfo.deliveryFee > 0 ? businessInfo.deliveryFee : 0;
+  const cartTotal = Math.max(0, cartSubtotal - discountValue + deliveryFeeAmount);
   const cartCount = Object.values(cart).reduce<number>((acc, qty) => acc + (Number(qty) || 0), 0);
 
-  const handleApplyCoupon = () => {
+  const handleApplyCoupon = async () => {
     setCouponError(null);
     const code = couponCode.toUpperCase();
     
@@ -1530,9 +1531,15 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     }
 
     const usersPool = (allUsers && allUsers.length > 0) ? allUsers : JSON.parse(localStorage.getItem('gas_delivery_users') || '[]');
-    const referrer = usersPool.find((u: any) => 
+    let referrer = usersPool.find((u: any) => 
       codeService.matchesReferralCode(u, code) && u.id !== user.id
     );
+    if (!referrer) {
+      const remote = await userService.lookupReferral(code);
+      if (remote && remote.id !== user.id) {
+        referrer = { id: remote.id, name: remote.name, referralCode: remote.referralCode };
+      }
+    }
 
     if (referrer) {
       // Regra 1: Apenas no PRIMEIRO pedido do novo usuário (sem pedidos anteriores não cancelados)
@@ -1577,7 +1584,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       }
 
       // Desconto dinâmico configurado pelo gestor
-      const discountAmount = benefitsConfig?.referralDiscountValue ?? 10;
+      const discountAmount = benefitsConfig?.referralDiscountValue ?? 0;
+      if (discountAmount <= 0) {
+        setCouponError('O desconto de indicação ainda não foi configurado pela loja.');
+        return;
+      }
       const referralCoupon: Coupon = {
         id: `REF-${referrer.id}`,
         code: code.toUpperCase(),
@@ -1602,6 +1613,10 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   };
 
   const updateCart = (id: string, delta: number) => {
+    if (delta > 0) {
+      const product = productsList.find(p => p.id === id);
+      if (!isPriceDefined(product?.price)) return;
+    }
     setCart(prev => {
       const newQty = (prev[id] || 0) + delta;
       if (newQty <= 0) {
@@ -1615,6 +1630,19 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
   const handleConfirmOrder = async () => {
     if (!selectedAddress) {
       alert("Por favor, selecione um endereço de entrega.");
+      return;
+    }
+    const missingPrice = Object.entries(cart).some(([id, qty]) => {
+      if (!qty) return false;
+      const product = productsList.find(p => p.id === id);
+      return !isPriceDefined(product?.price);
+    });
+    if (missingPrice) {
+      alert('Há item sem preço. A loja ainda precisa definir o valor.');
+      return;
+    }
+    if (businessInfo?.minOrderValue && cartSubtotal < businessInfo.minOrderValue) {
+      alert(`Pedido mínimo configurado pela loja: R$ ${businessInfo.minOrderValue.toFixed(2)}.`);
       return;
     }
     setStep('processing');
@@ -1659,7 +1687,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
               refereePhone: user.phone || '',
               status: 'Pendente',
               orderId: orderId,
-              pointsAwarded: benefitsConfig?.referralPointsAwarded ?? 100, // Pontos para o indicador quando a 1ª compra for concluída
+              pointsAwarded: benefitsConfig?.referralPointsAwarded ?? 0, // Pontos para o indicador quando a 1ª compra for concluída
               createdAt: new Date().toISOString()
             };
             onAddReferral(newReferral);
@@ -1799,7 +1827,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
             {activeTab === 'home' && (
               <motion.div key="home" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
                 {step === 'landing' && (
-              <div className="p-4 max-w-md mx-auto space-y-4 pt-6 h-[calc(100vh-72px)] overflow-hidden flex flex-col justify-between pb-4">
+              <div className="p-4 max-w-md mx-auto space-y-4 pt-6 pb-28 flex flex-col">
                 <header>
                   <h1 className="text-2xl font-black text-slate-900 leading-tight">
                     {getGreeting()}, <span className="text-yellow-500">{user.name}</span>!
@@ -1873,7 +1901,11 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
 
                 <div className="bg-yellow-50 p-4 rounded-3xl border border-yellow-100">
                   <p className="text-yellow-800 font-black text-xs mb-1">Dica do dia</p>
-                  <p className="text-yellow-700 text-xs leading-tight">Indique um amigo e ganhe R$ 5,00 de desconto na sua próxima recarga de gás!</p>
+                  <p className="text-yellow-700 text-xs leading-tight">
+                    {benefitsConfig?.referralDiscountValue
+                      ? `Indique um amigo e ganhe R$ ${benefitsConfig.referralDiscountValue.toFixed(2)} de desconto na próxima recarga. O valor é o configurado pela loja.`
+                      : 'Indique um amigo. O desconto da indicação ainda não foi configurado pela loja.'}
+                  </p>
                 </div>
               </div>
             )}
@@ -2055,7 +2087,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         <span className="text-sm font-bold text-slate-300">Salvar este endereço para pedidos futuros</span>
                       </label>
 
-                      <div className="sticky bottom-24 mt-6">
+                      <div className="mt-4 mb-28">
                         <button
                           onClick={handleConfirmAddress}
                           disabled={!addressNumber.trim()}
@@ -2142,9 +2174,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                           onError={(e: any) => { e.target.src = 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=600&auto=format&fit=crop&q=80'; }}
                         />
                         <div className="flex-1 min-w-0">
-                          <h3 className="font-bold text-sm truncate">{p.name}</h3>
+                          <h3 className="font-bold text-sm line-clamp-2">{p.name}</h3>
                           <div className="flex items-baseline gap-2 mt-0.5">
-                            <p className="text-lg font-black text-slate-900">R$ {p.price.toFixed(2)}</p>
+                            <p className={`text-lg font-black ${isPriceDefined(p.price) ? 'text-slate-900' : 'text-amber-700'}`}>{formatProductPrice(p.price)}</p>
                             {p.unit && <span className="text-[10px] text-slate-400 font-bold">{p.unit}</span>}
                           </div>
                           <div className="flex flex-wrap items-center gap-1.5 mt-1">
@@ -2163,7 +2195,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                         <div className="flex items-center gap-3 bg-slate-100 rounded-full p-1 shrink-0">
                           <button onClick={() => updateCart(p.id, -1)} className="w-8 h-8 rounded-full bg-white flex items-center justify-center shadow-sm cursor-pointer hover:bg-slate-50"><Minus className="w-4 h-4" /></button>
                           <span className="font-bold w-4 text-center">{cart[p.id] || 0}</span>
-                          <button onClick={() => updateCart(p.id, 1)} className="w-8 h-8 rounded-full bg-yellow-400 flex items-center justify-center shadow-sm cursor-pointer hover:bg-yellow-300"><Plus className="w-4 h-4" /></button>
+                          <button
+                            onClick={() => updateCart(p.id, 1)}
+                            disabled={!isPriceDefined(p.price)}
+                            className="w-8 h-8 rounded-full bg-yellow-400 flex items-center justify-center shadow-sm cursor-pointer hover:bg-yellow-300 disabled:opacity-40 disabled:cursor-not-allowed"
+                            aria-label={isPriceDefined(p.price) ? 'Adicionar' : 'Preço ainda não definido'}
+                          ><Plus className="w-4 h-4" /></button>
                         </div>
                       </div>
                     );
@@ -2349,6 +2386,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     <div className="flex justify-between text-sm text-green-600">
                       <span>Desconto</span>
                       <span className="font-bold">- R$ {discountValue.toFixed(2)}</span>
+                    </div>
+                  )}
+                  {deliveryFeeAmount > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span className="text-slate-500">Taxa de entrega</span>
+                      <span className="font-bold">R$ {deliveryFeeAmount.toFixed(2)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-lg font-black pt-2 border-t border-slate-50">
@@ -2987,7 +3030,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       <Copy className="w-4 h-4 text-yellow-400" />
                     </button>
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-3">Você ganha {benefitsConfig?.referralPointsAwarded ?? 100} pontos e seu amigo ganha R$ {(benefitsConfig?.referralDiscountValue ?? 10).toFixed(2)} de desconto na 1ª compra dele.</p>
+                  <p className="text-[10px] text-slate-500 mt-3">Você ganha {benefitsConfig?.referralPointsAwarded ?? 0} pontos e seu amigo ganha R$ {(benefitsConfig?.referralDiscountValue ?? 0).toFixed(2)} de desconto na 1ª compra dele.</p>
                   <button 
                     onClick={() => setIsDirectReferralModalOpen(true)}
                     className="mt-4 w-full bg-slate-900 text-white py-3.5 rounded-2xl font-black text-xs hover:bg-slate-800 transition-all flex items-center justify-center gap-2 shadow-lg shadow-slate-900/10"
@@ -3004,7 +3047,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     {referrals.filter(r => r.referrerId === user.id).length === 0 ? (
                       <div className="p-8 text-center">
                         <p className="text-slate-400 text-sm font-bold">Você ainda não indicou ninguém.</p>
-                        <p className="text-xs text-slate-400 mt-1">Indique amigos e ganhe {benefitsConfig?.referralPointsAwarded ?? 100} pontos por compra concluída!</p>
+                        <p className="text-xs text-slate-400 mt-1">Indique amigos e ganhe {benefitsConfig?.referralPointsAwarded ?? 0} pontos por compra concluída!</p>
                       </div>
                     ) : (
                       <div className="divide-y divide-slate-50">
@@ -3610,7 +3653,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       refereeName: directReferralForm.name.trim(),
                       refereePhone: directReferralForm.phone.trim(),
                       status: 'Pendente',
-                      pointsAwarded: benefitsConfig?.referralPointsAwarded ?? 100,
+                      pointsAwarded: benefitsConfig?.referralPointsAwarded ?? 0,
                       createdAt: new Date().toISOString()
                     };
                     onAddReferral(newReferral);
@@ -4026,7 +4069,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
               </div>
 
               <p className="text-xs text-slate-600 leading-relaxed mb-5">
-                Envie o convite para o seu amigo. Quando ele concluir o 1º pedido com seu cupom, <strong>vocês dois ganham {benefitsConfig?.referralPointsAwarded ?? 100} pontos</strong>!
+                Envie o convite para o seu amigo. Quando ele concluir o 1º pedido com seu cupom, <strong>vocês dois ganham {benefitsConfig?.referralPointsAwarded ?? 0} pontos</strong>!
               </p>
 
               {/* 3 Botões de Ação */}
@@ -4036,7 +4079,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   onClick={() => {
                     const cleanPhone = referralActionModal.referral.refereePhone.replace(/\D/g, '');
                     const fullPhone = cleanPhone.startsWith('55') ? cleanPhone : `55${cleanPhone}`;
-                    const discountVal = (benefitsConfig?.referralDiscountValue ?? 10).toFixed(2);
+                    const discountVal = (benefitsConfig?.referralDiscountValue ?? 0).toFixed(2);
                     const inviteMsg = `Olá ${referralActionModal.referral.refereeName}! Te convido a pedir gás na Porto Gás com desconto no seu 1º pedido. Acesse o link para ativar seu desconto de R$ ${discountVal} automaticamente: ${window.location.origin}?ref=${userReferralCode} (ou use o cupom *${userReferralCode}* no carrinho).`;
                     window.open(`https://wa.me/${fullPhone}?text=${encodeURIComponent(inviteMsg)}`, '_blank');
                   }}
@@ -4851,12 +4894,12 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       </AnimatePresence>
 
       {/* Bottom Nav */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around p-3 z-50 shadow-sm">
-        <button onClick={() => setActiveTab('home')} className={`flex flex-col items-center gap-1 ${activeTab === 'home' ? 'text-yellow-500' : 'text-slate-400'}`}>
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex justify-around px-2 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] z-50 shadow-sm">
+        <button onClick={() => { setActiveTab('home'); setStep('landing'); }} className={`flex flex-col items-center gap-1 min-w-0 ${activeTab === 'home' ? 'text-yellow-500' : 'text-slate-400'}`}>
           <Home className="w-6 h-6" />
           <span className="text-[10px] font-bold">Início</span>
         </button>
-        <button onClick={() => setActiveTab('tracking')} className={`flex flex-col items-center gap-1 ${activeTab === 'tracking' ? 'text-yellow-500' : 'text-slate-400'}`}>
+        <button onClick={() => setActiveTab('tracking')} className={`relative flex flex-col items-center gap-1 min-w-0 ${activeTab === 'tracking' ? 'text-yellow-500' : 'text-slate-400'}`}>
           <Navigation className="w-6 h-6" />
           <span className="text-[10px] font-bold">Rastrear</span>
           {orders.some(o => isUserOrder(o) && o.status === 'Em Rota') && (

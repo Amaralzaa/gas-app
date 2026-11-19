@@ -539,7 +539,7 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
     name: '',
     email: '',
     password: '',
-    role: 'admin' as UserRole,
+    role: 'entregador' as UserRole,
     allowedTabs: [] as string[]
   });
   const [isSavingCollaborator, setIsSavingCollaborator] = useState(false);
@@ -868,27 +868,33 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       const createdUser = await authService.signUp(
         newCollaborator.email, 
         newCollaborator.name, 
-        newCollaborator.role,
-        '' // No phone for collaborators usually, or same as email for now
+        newCollaborator.role === 'admin' ? 'entregador' : newCollaborator.role,
+        '',
+        newCollaborator.password
       );
 
       if (!createdUser) throw new Error('Não foi possível criar o colaborador');
 
-      // Update profile with allowedTabs (since signUp might not include it yet)
       const { error: profileError } = await supabase
         .from('profiles')
-        .update({ allowedTabs: newCollaborator.allowedTabs })
+        .update({
+          allowed_tabs: newCollaborator.allowedTabs,
+          role: newCollaborator.role === 'admin' ? 'entregador' : newCollaborator.role,
+          name: newCollaborator.name,
+        })
         .eq('id', createdUser.id);
 
-      if (profileError) throw profileError;
+      if (profileError) {
+        console.warn(profileError);
+      }
 
-      alert('Colaborador cadastrado com sucesso!');
+      alert('Colaborador criado. O cadastro público nasce como cliente. Se você ainda está logado como gestor, o papel foi atualizado. Se a sessão trocou para o novo usuário, promova o papel no SQL (veja o relatório da fase 1). Nomeie a pessoa com prefixo TESTE em contas de teste.');
       setIsAddingCollaborator(false);
       setNewCollaborator({
         name: '',
         email: '',
         password: '',
-        role: 'admin',
+        role: 'entregador',
         allowedTabs: []
       });
       // In a real app, you'd trigger a reload of allCollaborators prop
@@ -1041,8 +1047,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
       {/* Main Content - Área de conteúdo com scroll vertical independente */}
       <main className={`flex-1 h-full overflow-y-auto bg-slate-50 custom-scrollbar ${(activeTab === 'dashboard' || activeTab === 'benefits') ? 'pb-2 lg:overflow-hidden' : 'pb-20'}`}>
         {/* Mobile Tab Bar */}
-        <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 flex items-center justify-between sticky top-0 z-30 overflow-x-auto shadow-sm">
-          <div className="flex items-center gap-2">
+        <div className="md:hidden px-4 py-3 bg-white border-b border-slate-200 sticky top-0 z-30 overflow-x-auto shadow-sm">
+          <div className="flex items-center gap-2 flex-nowrap min-w-max">
             {(user.role === 'gestor' || user.allowedTabs?.includes('dashboard')) && <button onClick={() => setActiveTab('dashboard')} className={`p-2 rounded-xl transition-all ${activeTab === 'dashboard' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Métricas"><LayoutDashboard className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('tracking')) && <button onClick={() => setActiveTab('tracking')} className={`p-2 rounded-xl transition-all ${activeTab === 'tracking' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Acompanhamento"><Clock className="w-5 h-5" /></button>}
             {(user.role === 'gestor' || user.allowedTabs?.includes('orders')) && <button onClick={() => setActiveTab('orders')} className={`p-2 rounded-xl transition-all ${activeTab === 'orders' ? 'bg-yellow-400 text-slate-900 shadow-sm' : 'bg-slate-100 text-slate-600'}`} title="Pedidos"><Package className="w-5 h-5" /></button>}
@@ -4252,8 +4258,8 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Função Principal</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(['gestor', 'admin', 'entregador'] as const).map(role => (
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['gestor', 'entregador'] as const).map(role => (
                       <button 
                         key={role}
                         onClick={() => setNewCollaborator(prev => ({ ...prev, role }))}

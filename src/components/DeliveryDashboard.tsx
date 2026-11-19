@@ -292,9 +292,15 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
   // Pedidos do Entregador
   const myDeliveries = useMemo(() => {
     return orders
-      .filter(o => o.deliveryPersonId === user.id && (o.status === 'Em Rota' || o.status === 'Atribuído'))
+      .filter(o => o.deliveryPersonId === user.id && (o.status === 'Em Rota' || o.status === 'Atribuído' || o.status === 'Pendente'))
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
   }, [orders, user.id]);
+
+  const openOrders = useMemo(() => {
+    return orders
+      .filter(o => !o.deliveryPersonId && o.status === 'Pendente')
+      .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  }, [orders]);
 
   const nextActiveDelivery = myDeliveries[0] || null;
 
@@ -448,14 +454,14 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
     let customerName = 'Consumidor Final (Rua)';
     let customerPhone = '';
-    let customerId = 'walkin-' + Math.random().toString(36).substr(2, 7);
+    let customerId = '';
     let address: Address = {
       street: walkinStreet.trim() || 'Venda Consumidor Rua',
       number: 'S/N',
       neighborhood: walkinNeighborhood.trim() || 'Venda em Trânsito',
-      city: 'Niterói',
-      state: 'RJ',
-      cep: '24000-000',
+      city: businessInfo?.address?.city || 'São Gonçalo',
+      state: businessInfo?.address?.state || 'RJ',
+      cep: '',
       lat: locationToSave?.lat,
       lng: locationToSave?.lng
     };
@@ -868,7 +874,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
 
       {/* SEGUNDA LINHA: Apenas as abas navegáveis, sem segundo cabeçalho */}
       <nav className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800/90 px-3 py-2 shrink-0 z-30 shadow-md">
-        <div className="grid grid-cols-4 gap-1.5 max-w-lg mx-auto">
+        <div className="grid grid-cols-3 gap-1.5 max-w-lg mx-auto">
           {/* Aba Entregas */}
           <button
             type="button"
@@ -1097,6 +1103,21 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                     )}
                   </div>
                 ))
+              )}
+
+              {openOrders.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-400">Pedidos sem entregador</h3>
+                  {openOrders.map((o) => (
+                    <div key={o.id} className="bg-slate-900/80 p-4 rounded-2xl border border-dashed border-slate-700">
+                      <p className="text-sm font-black text-white">{o.customerName || 'Cliente'}</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {o.address?.street || 'Endereço'}{o.address?.neighborhood ? ` · ${o.address.neighborhood}` : ''}
+                      </p>
+                      <p className="text-[11px] text-amber-300 mt-2 font-bold">Aguardando o gestor atribuir. Você vê o pedido, mas não altera o status.</p>
+                    </div>
+                  ))}
+                </div>
               )}
             </motion.div>
           )}

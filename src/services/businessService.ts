@@ -33,17 +33,17 @@ export const DEFAULT_BUSINESS_INFO: BusinessInfo = {
   name: 'Porto Gás Distribuidora',
   tradeName: 'Porto Gás & Água Express',
   cnpj: '',
-  phone: '(21) 99999-9999',
-  whatsapp: '(21) 99999-9999',
-  email: 'contato@portogas.com.br',
+  phone: '',
+  whatsapp: '',
+  email: '',
   logoUrl: '',
   address: {
-    street: 'Rua Principal',
-    number: '100',
-    neighborhood: 'Centro',
-    city: 'Niterói',
+    street: '',
+    number: '',
+    neighborhood: '',
+    city: 'São Gonçalo',
     state: 'RJ',
-    cep: '24020-000',
+    cep: '',
     complement: ''
   },
   openingHours: {
@@ -56,8 +56,8 @@ export const DEFAULT_BUSINESS_INFO: BusinessInfo = {
     sunday:    { isOpen: true, open: '08:00', close: '14:00' }
   },
   isOpenOverride: null, // null = horário automático, true = forçar aberto, false = forçar fechado
-  minOrderValue: 0,
-  deliveryFee: 0,
+  minOrderValue: undefined,
+  deliveryFee: undefined,
   deliveryPeriods: DEFAULT_DELIVERY_PERIODS
 };
 
@@ -100,8 +100,8 @@ export const businessService = {
           address: data.address || DEFAULT_BUSINESS_INFO.address,
           openingHours: data.opening_hours || DEFAULT_BUSINESS_INFO.openingHours,
           isOpenOverride: data.is_open_override,
-          minOrderValue: Number(data.min_order_value || 0),
-          deliveryFee: Number(data.delivery_fee || 0),
+          minOrderValue: data.min_order_value == null ? undefined : Number(data.min_order_value),
+          deliveryFee: data.delivery_fee == null ? undefined : Number(data.delivery_fee),
           deliveryPeriods: deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
           updatedAt: data.updated_at
         };
@@ -152,8 +152,8 @@ export const businessService = {
         address: info.address,
         opening_hours: info.openingHours,
         is_open_override: info.isOpenOverride,
-        min_order_value: info.minOrderValue || 0,
-        delivery_fee: info.deliveryFee || 0,
+        min_order_value: info.minOrderValue ?? null,
+        delivery_fee: info.deliveryFee ?? null,
         delivery_periods: info.deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
         updated_at: new Date().toISOString()
       };

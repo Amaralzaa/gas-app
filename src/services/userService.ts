@@ -31,6 +31,16 @@ export const userService = {
     } catch {}
   },
 
+  async lookupReferral(code: string): Promise<{ id: string; name: string; referralCode: string } | null> {
+    const trimmed = code.trim();
+    if (!trimmed) return null;
+    const { data, error } = await supabase.rpc('lookup_referral_code', { p_code: trimmed });
+    if (error || !data) return null;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row?.id) return null;
+    return { id: row.id, name: row.name, referralCode: row.referral_code };
+  },
+
   async getProfiles(): Promise<AppUser[]> {
     const { data, error } = await supabase
       .from('profiles')
@@ -53,6 +63,7 @@ export const userService = {
         points: p.points,
         addresses,
         location: p.location,
+        allowedTabs: p.allowed_tabs || [],
         pointHistory: this.getPointHistory(p.id)
       };
       return {
@@ -104,6 +115,8 @@ export const userService = {
     if (updates.points !== undefined) dbUpdates.points = updates.points;
     if (updates.addresses !== undefined) dbUpdates.addresses = updates.addresses;
     if (updates.location !== undefined) dbUpdates.location = updates.location;
+    if (updates.referralCode !== undefined) dbUpdates.referral_code = updates.referralCode;
+    if (updates.allowedTabs !== undefined) dbUpdates.allowed_tabs = updates.allowedTabs;
 
     if (Object.keys(dbUpdates).length > 0) {
       let attempts = 0;

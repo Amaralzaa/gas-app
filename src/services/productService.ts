@@ -18,14 +18,13 @@ export const productService = {
         .order('name', { ascending: true });
 
       const timeoutPromise = new Promise<{ data: null; error: any }>((res) => 
-        setTimeout(() => res({ data: null, error: { message: 'timeout' } }), 1200)
+        setTimeout(() => res({ data: null, error: { message: 'timeout' } }), 8000)
       );
 
       const { data, error } = await Promise.race([fetchPromise, timeoutPromise]);
 
       if (!error && Array.isArray(data) && data.length > 0) {
         const mapped: Product[] = data.map(this.mapFromDb);
-        // Atualiza cache local
         this.saveToLocalCache(mapped, false);
         return mapped;
       }
@@ -45,7 +44,7 @@ export const productService = {
     } catch {}
 
     // 3. Se ainda não houver nada, inicializa com os modelos pré-definidos do catálogo brasileiro
-    const initialList = PRODUCT_PRESETS.slice(0, 6);
+    const initialList = PRODUCT_PRESETS.filter((p) => p.id === 'p13' || p.id === 'p20' || p.id === 'p45');
     this.saveToLocalCache(initialList, false);
     return initialList;
   },
@@ -173,7 +172,7 @@ export const productService = {
     return {
       id: row.id,
       name: row.name,
-      price: Number(row.price) || 0,
+      price: row.price === null || row.price === undefined || row.price === '' ? 0 : Number(row.price),
       image: row.image || '',
       description: row.description || '',
       category: row.category || 'Gás GLP',

@@ -1,8 +1,12 @@
 import { createClient } from '@supabase/supabase-js';
 
 const env = (import.meta as any).env || {};
-const supabaseUrl: string = env.VITE_SUPABASE_URL || 'https://rulknyshcpsqnsmsoypt.supabase.co';
-const supabaseAnonKey: string = env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_spSaz4-lfvSkx93sT3onHA_1ZD4BMUU';
+const supabaseUrl: string = env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey: string = env.VITE_SUPABASE_ANON_KEY || '';
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Defina VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY em .env.local (não commite a chave).');
+}
 
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {

@@ -12,9 +12,12 @@ export const orderService = {
     return (data || []).map(this.mapOrder);
   },
 
+  isUuid(value?: string | null): boolean {
+    return !!value && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  },
+
   async createOrder(order: Order): Promise<Order> {
     const payload: any = {
-      customer_id: order.customerId,
       customer_name: order.customerName,
       phone: order.phone,
       items: order.items,
@@ -24,63 +27,43 @@ export const orderService = {
       status: order.status,
       payment_method: order.paymentMethod,
       address: order.address,
-      estimated_arrival: order.estimatedArrival,
-      feedback: order.feedback || null,
-      delivery_person_id: order.deliveryPersonId || null,
-      delivery_person_location: order.deliveryPersonLocation || null,
+      estimated_arrival: order.estimatedArrival || null,
+      delivery_person_id: this.isUuid(order.deliveryPersonId) ? order.deliveryPersonId : null,
     };
 
-    if (order.id) {
+    if (this.isUuid(order.customerId)) {
+      payload.customer_id = order.customerId;
+    } else {
+      payload.customer_id = null;
+    }
+
+    if (this.isUuid(order.id)) {
       payload.id = order.id;
     }
 
-    if (order.completedAt) {
+    let feedback = order.feedback || '';
+    if (order.completedAt && !feedback.includes('[Concluído em:')) {
       const completedNote = `[Concluído em: ${order.completedAt}]`;
-      if (payload.feedback) {
-        if (!payload.feedback.includes('[Concluído em:')) {
-          payload.feedback = `${payload.feedback} | ${completedNote}`;
-        }
-      } else {
-        payload.feedback = completedNote;
-      }
+      feedback = feedback ? `${feedback} | ${completedNote}` : completedNote;
     }
 
-    if (order.isScheduled) {
-      payload.is_scheduled = true;
-      payload.scheduled_date = order.scheduledDate || null;
-      payload.scheduled_period = order.scheduledPeriod || null;
-      payload.scheduled_time_range = order.scheduledTimeRange || null;
-    }
+    const optional: Record<string, unknown> = {
+      feedback: feedback || null,
+      delivery_person_location: order.deliveryPersonLocation || null,
+      is_scheduled: !!order.isScheduled,
+      scheduled_date: order.scheduledDate || null,
+      scheduled_date_iso: order.scheduledDateISO || null,
+      scheduled_period: order.scheduledPeriod || null,
+      scheduled_period_name: order.scheduledPeriodName || null,
+      scheduled_time_range: order.scheduledTimeRange || null,
+      selected_freebie: order.selectedFreebie || null,
+      referral_id: order.referralId || null,
+      is_force_activated: !!order.isForceActivated,
+      completed_at: order.completedAt || null,
+    };
+    Object.assign(payload, optional);
 
-    let { data, error } = await supabase
-      .from('orders')
-      .insert(payload)
-      .select()
-      .single();
-
-    // Fallback se as novas colunas de agendamento ainda não foram aplicadas no Supabase
-    if (error && (error.message?.includes('is_scheduled') || error.message?.includes('scheduled_date') || error.code === '42703')) {
-      console.warn('Colunas de agendamento não encontradas no Supabase. Salvando com anotação em feedback...');
-      const fallbackPayload = { ...payload };
-      delete fallbackPayload.is_scheduled;
-      delete fallbackPayload.scheduled_date;
-      delete fallbackPayload.scheduled_period;
-      delete fallbackPayload.scheduled_time_range;
-
-      const periodLabel = order.scheduledPeriodName || (order.scheduledPeriod === 'manha' ? 'Manhã' : order.scheduledPeriod === 'tarde' ? 'Tarde' : order.scheduledPeriod || 'Agendado');
-      const rangeLabel = order.scheduledTimeRange ? ` (${order.scheduledTimeRange})` : '';
-      const schedNote = `[Agendado para: ${order.scheduledDate || 'Amanhã'} - ${periodLabel}${rangeLabel}]`;
-      fallbackPayload.feedback = fallbackPayload.feedback ? `${fallbackPayload.feedback} | ${schedNote}` : schedNote;
-
-      const retryRes = await supabase
-        .from('orders')
-        .insert(fallbackPayload)
-        .select()
-        .single();
-
-      data = retryRes.data;
-      error = retryRes.error;
-    }
+    let { data, error } = await this.insertStrippingUnknown(payload);
 
     if (error) {
       console.error('Error creating order:', error);
@@ -121,30 +104,13 @@ export const orderService = {
       }
     }
 
-    let { error } = await supabase
-      .from('orders')
-      .update(payload)
-      .eq('id', orderId);
-
-    // Se as colunas cancellation_reason ou cancelled_at ainda não foram criadas no banco Supabase
-    if (error && (error.message?.includes('cancellation_reason') || error.message?.includes('cancelled_at') || error.code === 'PGRST204')) {
-      console.warn('Colunas de cancelamento ainda não criadas no Supabase. Atualizando status com fallback seguro...');
-      const fallbackPayload = { ...payload };
-      delete fallbackPayload.cancellation_reason;
-      delete fallbackPayload.cancelled_at;
-
-      // Preserva o motivo em feedback caso o campo feedback esteja livre
-      if (payload.cancellation_reason && !fallbackPayload.feedback) {
-        fallbackPayload.feedback = `[Cancelamento]: ${payload.cancellation_reason}`;
-      }
-
-      const retryResult = await supabase
-        .from('orders')
-        .update(fallbackPayload)
-        .eq('id', orderId);
-
-      error = retryResult.error;
+    if (updates.completedAt !== undefined) {
+      payload.completed_at = updates.completedAt;
     }
+    if (updates.isForceActivated !== undefined) payload.is_force_activated = updates.isForceActivated;
+    if (updates.selectedFreebie !== undefined) payload.selected_freebie = updates.selectedFreebie;
+
+    let { error } = await this.updateStrippingUnknown(orderId, payload);
 
     if (error) throw error;
   },
@@ -223,7 +189,50 @@ export const orderService = {
       scheduledDate: schedDate,
       scheduledDateISO: schedDateISO,
       scheduledPeriod: schedPeriod,
+      scheduledPeriodName: dbOrder.scheduled_period_name,
       scheduledTimeRange: schedRange,
+      selectedFreebie: dbOrder.selected_freebie || undefined,
+      referralId: dbOrder.referral_id || undefined,
+      isForceActivated: dbOrder.is_force_activated || false,
+      couponCode: dbOrder.coupon_code || undefined,
     };
+  },
+
+  async insertStrippingUnknown(payload: Record<string, unknown>) {
+    let current = { ...payload };
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const res = await supabase.from('orders').insert(current).select().single();
+      if (!res.error) return res;
+      const stripped = this.stripUnknownColumn(current, res.error);
+      if (!stripped) return res;
+      current = stripped;
+    }
+    return supabase.from('orders').insert(current).select().single();
+  },
+
+  async updateStrippingUnknown(orderId: string, payload: Record<string, unknown>) {
+    let current = { ...payload };
+    for (let attempt = 0; attempt < 16; attempt++) {
+      const res = await supabase.from('orders').update(current).eq('id', orderId);
+      if (!res.error) return res;
+      const stripped = this.stripUnknownColumn(current, res.error);
+      if (!stripped) return res;
+      current = stripped;
+    }
+    return supabase.from('orders').update(current).eq('id', orderId);
+  },
+
+  stripUnknownColumn(payload: Record<string, unknown>, error: { message?: string; code?: string }) {
+    const msg = error?.message || '';
+    const missingColumn = error?.code === 'PGRST204' || error?.code === '42703' || /column/i.test(msg);
+    if (!missingColumn) return null;
+    const key = Object.keys(payload).find((k) => msg.includes(k));
+    if (!key) return null;
+    const next = { ...payload };
+    delete next[key];
+    if (key === 'cancellation_reason' && payload.cancellation_reason && !next.feedback) {
+      next.feedback = `[Cancelamento]: ${payload.cancellation_reason}`;
+    }
+    return next;
   }
 };
