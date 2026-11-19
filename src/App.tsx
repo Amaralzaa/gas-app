@@ -108,33 +108,9 @@ const LoginView = ({
         }
       }
 
-      // Transição imediata: conecta na hora e sincroniza perfil em background
       if (authUser) {
-        let localName = '';
-        try { localName = localStorage.getItem('gas_app_customer_name') || ''; } catch {}
-        const cleanPhone = phone.replace(/\D/g, '');
-        const cachedAddresses = userService.getAddressCache(authUser.id);
-
-        const immediateUser: AppUser = {
-          id: authUser.id,
-          email: authUser.email || '',
-          role: 'cliente',
-          name: (localName && localName.trim()) || authUser.user_metadata?.name || (loginMethod === 'phone' ? 'Cliente' : 'Usuário'),
-          phone: cleanPhone || authUser.user_metadata?.phone,
-          points: 0,
-          addresses: cachedAddresses,
-          allowedTabs: []
-        };
-
-        // 1. Conecta o usuário IMEDIATAMENTE para entrar no app sem travar em CARREGANDO
-        onLogin(immediateUser);
-
-        // 2. Busca perfil detalhado em paralelo e atualiza quando chegar
-        authService.getProfileForUser(authUser.id, authUser.email, authUser.user_metadata)
-          .then(fullProfile => {
-            if (fullProfile) onLogin(fullProfile);
-          })
-          .catch(() => {});
+        const fullProfile = await authService.getProfileForUser(authUser.id, authUser.email, authUser.user_metadata);
+        onLogin(fullProfile);
       }
     } catch (err: any) {
       setError(err.message || 'Erro ao processar solicitação.');
@@ -491,6 +467,10 @@ export default function App() {
         }
 
         if (session?.user) {
+          // Não consultar o banco dentro do callback: o cliente trava o lock de auth.
+          const su = session.user;
+          setTimeout(async () => {
+            if (cancelled) return;
           try {
             // Deep-link: login automático via phone param
             if (phoneParam && event === 'INITIAL_SESSION') {
@@ -510,7 +490,7 @@ export default function App() {
               }
             } else {
               const appUser = await authService.getProfileForUser(
-                session.user.id, session.user.email, session.user.user_metadata
+                su.id, su.email, su.user_metadata
               );
               if (!cancelled) {
                 const userWithCode = {
@@ -525,11 +505,11 @@ export default function App() {
             // Cria objeto mínimo para não bloquear acesso
             if (!cancelled) {
               const minimalUser: AppUser = {
-                id: session.user.id,
-                email: session.user.email,
+                id: su.id,
+                email: su.email,
                 role: 'cliente',
-                name: session.user.user_metadata?.name || 'Usuário',
-                phone: session.user.user_metadata?.phone,
+                name: su.user_metadata?.name || 'Usuário',
+                phone: su.user_metadata?.phone,
                 points: 0,
                 addresses: [],
                 allowedTabs: []
@@ -541,6 +521,7 @@ export default function App() {
             clearTimeout(safetyTimeout);
             if (!cancelled) setLoading(false);
           }
+          }, 0);
         } else {
           // Sem sessão — mostra tela de login
           clearTimeout(safetyTimeout);

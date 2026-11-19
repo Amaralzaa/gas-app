@@ -205,18 +205,20 @@ export const authService = {
     };
 
     try {
-      // Usar timeout de no máximo 2500ms para nunca bloquear ou travar a UI em conexões móveis
-      const fetchPromise = supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
-
-      const timeoutPromise = new Promise<{ data: null; error: any }>((_, reject) =>
-        setTimeout(() => reject(new Error('Profile fetch timeout')), 2500)
-      );
-
-      const { data: profile } = await Promise.race([fetchPromise, timeoutPromise]);
+      let profile: any = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
+        if (data) {
+          profile = data;
+          break;
+        }
+        if (error) console.warn('Profile fetch:', error.message);
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
 
       if (profile) {
         const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')

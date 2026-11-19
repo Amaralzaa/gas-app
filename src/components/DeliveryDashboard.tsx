@@ -1962,7 +1962,7 @@ export const DeliveryDashboard: React.FC<DeliveryDashboardProps> = ({
                       return (
                         <div key={p.id} className="bg-slate-950 p-3 rounded-2xl border border-slate-800 flex items-center justify-between">
                           <div className="flex items-center gap-3 flex-1 min-w-0 pr-2">
-                            <img src={p.image} className="w-10 h-10 rounded-xl object-cover shrink-0" alt={p.name} />
+                            <img src={p.image || 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=200&auto=format&fit=crop&q=60'} className="w-10 h-10 rounded-xl object-cover shrink-0" alt={p.name} />
                             <div className="min-w-0">
                               <p className="font-bold text-xs text-white truncate">{p.name}</p>
                               <div className="flex items-center gap-1.5 mt-0.5">

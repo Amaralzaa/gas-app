@@ -1316,6 +1316,37 @@ export const ManagerDashboard: React.FC<ManagerDashboardProps> = ({
                   )}
                 </div>
 
+                {futureScheduledOrders.length > 0 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="w-3 h-3 rounded-full bg-purple-500"></div>
+                        <h3 className="font-black text-lg text-slate-900">
+                          Pedidos agendados <span className="text-purple-600">({futureScheduledOrders.length})</span>
+                        </h3>
+                      </div>
+                      <span className="text-xs text-slate-500 font-bold hidden sm:inline">Fora da fila imediata até a data combinada</span>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                      {futureScheduledOrders.map(o => (
+                        <div key={o.id} className="bg-white rounded-3xl p-5 border border-purple-200 shadow-sm">
+                          <p className="text-[10px] font-black text-slate-400">#{String(o.id).slice(0, 8)}</p>
+                          <h4 className="font-black text-base text-slate-900 mt-1">{o.customerName}</h4>
+                          <p className="text-xs text-purple-700 font-bold mt-1">{o.scheduledDate} · {o.scheduledPeriodName || o.scheduledPeriod}</p>
+                          <p className="text-sm font-black text-slate-900 mt-2">R$ {Number(o.total || 0).toFixed(2)}</p>
+                          <button
+                            type="button"
+                            onClick={() => setAssigningOrder(o)}
+                            className="mt-3 w-full bg-slate-900 hover:bg-yellow-400 hover:text-slate-950 text-white font-black text-xs py-2.5 rounded-xl"
+                          >
+                            ATRIBUIR ENTREGADOR
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* 2. SEÇÃO: PEDIDOS ATRIBUÍDOS */}
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">

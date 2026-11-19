@@ -2168,7 +2168,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     return (
                       <div key={p.id} className="bg-white p-4 rounded-2xl shadow-sm flex items-center gap-4 border border-slate-100 hover:border-yellow-400/40 transition-all">
                         <img 
-                          src={p.image} 
+                          src={p.image || 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=200&auto=format&fit=crop&q=60'} 
                           className="w-16 h-16 rounded-xl object-cover shrink-0" 
                           referrerPolicy="no-referrer"
                           onError={(e: any) => { e.target.src = 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=600&auto=format&fit=crop&q=80'; }}
@@ -2480,7 +2480,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                       return (
                         <div key={id} className="py-2.5 flex items-center justify-between gap-3">
                           <div className="flex items-center gap-3">
-                            <img src={product.image} className="w-10 h-10 rounded-xl object-cover" referrerPolicy="no-referrer" />
+                            <img src={product.image || 'https://images.unsplash.com/photo-1585338107529-13afc5f02586?w=200&auto=format&fit=crop&q=60'} className="w-10 h-10 rounded-xl object-cover" referrerPolicy="no-referrer" alt="" />
                             <div>
                               <p className="font-bold text-xs text-slate-900">{product.name}</p>
                               <p className="text-[11px] text-slate-400">{qty}x · R$ {product.price.toFixed(2)} cada</p>
@@ -2620,7 +2620,13 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   )}
                   <div className="flex justify-between text-xs text-slate-500">
                     <span>Taxa de entrega</span>
-                    <span className="font-bold text-emerald-600 uppercase">Grátis</span>
+                    {deliveryFeeAmount > 0 ? (
+                      <span className="font-bold text-slate-900">R$ {deliveryFeeAmount.toFixed(2)}</span>
+                    ) : businessInfo?.deliveryFee === 0 ? (
+                      <span className="font-bold text-emerald-600 uppercase">Grátis</span>
+                    ) : (
+                      <span className="font-bold text-amber-700">A definir</span>
+                    )}
                   </div>
                   <div className="flex justify-between items-center text-lg font-black pt-2 border-t border-slate-100">
                     <span className="text-slate-900">Total a Pagar</span>
@@ -2628,7 +2634,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                   </div>
                   <div className="bg-yellow-50 rounded-xl p-2.5 text-center mt-2 border border-yellow-100">
                     <p className="text-[11px] text-yellow-800 font-bold">
-                      🎉 Você ganhará <span className="font-black text-yellow-900">{Math.floor(cartTotal * 10)} pontos</span> com este pedido!
+                      🎉 Você ganhará <span className="font-black text-yellow-900">{Math.floor(cartTotal * (benefitsConfig?.pointsPerCurrency ?? 0))} pontos</span> com este pedido!
                     </p>
                   </div>
                 </div>
@@ -3865,24 +3871,28 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
                     {cancelModalOrder.status === 'Em Rota'
                       ? 'Seu pedido já está a caminho do seu endereço. Para cancelar, ligue ou envie uma mensagem no WhatsApp no número '
                       : 'Seu pedido já foi recebido pelo entregador e logo estará a caminho. Para cancelar, ligue ou envie uma mensagem no WhatsApp no número '}
-                    <strong className="text-slate-900 font-black">(21) 3705-5965</strong>.
+                    <strong className="text-slate-900 font-black">{businessInfo?.whatsapp || businessInfo?.phone || 'telefone ainda não configurado pela loja'}</strong>.
                   </p>
                   <div className="space-y-2.5">
+                    {(businessInfo?.phone || businessInfo?.whatsapp) && (
                     <a
-                      href="tel:+552137055965"
+                      href={`tel:+55${(businessInfo.phone || businessInfo.whatsapp || '').replace(/\D/g, '')}`}
                       className="w-full bg-slate-900 hover:bg-slate-800 text-white font-black py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2 text-xs transition-all shadow-lg shadow-slate-900/10"
                     >
                       <Phone className="w-4 h-4 text-yellow-400" />
-                      (21) 3705-5965 (LIGAR AGORA)
+                      LIGAR AGORA
                     </a>
+                    )}
+                    {(businessInfo?.whatsapp || businessInfo?.phone) && (
                     <a
-                      href={`https://wa.me/552137055965?text=${encodeURIComponent(`Olá, gostaria de cancelar meu pedido #${cancelModalOrder.id}`)}`}
+                      href={`https://wa.me/55${(businessInfo?.whatsapp || businessInfo?.phone || '').replace(/\D/g, '')}?text=${encodeURIComponent(`Olá, gostaria de cancelar meu pedido #${cancelModalOrder.id}`)}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="w-full bg-emerald-500 hover:bg-emerald-600 text-white font-black py-3.5 px-4 rounded-2xl flex items-center justify-center gap-2 text-xs transition-all shadow-lg shadow-emerald-500/20"
                     >
                       💬 ENVIAR MENSAGEM NO WHATSAPP
                     </a>
+                    )}
                     <button
                       onClick={() => setCancelModalOrder(null)}
                       className="w-full text-slate-400 hover:text-slate-600 font-bold text-xs py-2 transition-colors"
@@ -3899,7 +3909,7 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
       <AnimatePresence>
         {ratingSuccessModal && (() => {
           const orderTotal = ratingSuccessModal.order.total || 0;
-          const pointsEarned = Math.floor(orderTotal * 10);
+          const pointsEarned = Math.floor(orderTotal * (benefitsConfig?.pointsPerCurrency ?? 0));
           const availablePoints = user.points || 0;
 
           return (

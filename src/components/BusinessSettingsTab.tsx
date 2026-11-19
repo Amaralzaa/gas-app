@@ -46,6 +46,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
 }) => {
   const isDirtyRef = React.useRef(false);
   const lastUpdatedRef = React.useRef(businessInfo?.updatedAt);
+  const formRef = React.useRef<BusinessInfo | null>(null);
   const [form, setForm] = useState<BusinessInfo>(() => ({
     ...businessInfo,
     deliveryPeriods: (businessInfo.deliveryPeriods && businessInfo.deliveryPeriods.length > 0)
@@ -71,7 +72,17 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
     }
   }, [businessInfo]);
 
+  formRef.current = form;
   const periods = form.deliveryPeriods || DEFAULT_DELIVERY_PERIODS;
+
+  const chooseOpenOverride = (value: boolean | null) => {
+    isDirtyRef.current = true;
+    setForm((prev) => {
+      const next = { ...prev, isOpenOverride: value };
+      formRef.current = next;
+      return next;
+    });
+  };
 
   const handleTogglePeriodActive = (id: string) => {
     isDirtyRef.current = true;
@@ -201,7 +212,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
     e.preventDefault();
     setIsSaving(true);
     try {
-      await onSave(form);
+      await onSave(formRef.current || form);
       isDirtyRef.current = false;
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
@@ -495,7 +506,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 pt-2">
             <button
               type="button"
-              onClick={() => setForm(f => ({ ...f, isOpenOverride: null }))}
+              onClick={() => chooseOpenOverride(null)}
               className={`p-4 rounded-2xl border text-left transition-all ${
                 form.isOpenOverride === null
                   ? 'border-yellow-500 bg-yellow-50 text-slate-900 ring-2 ring-yellow-400'
@@ -508,7 +519,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
 
             <button
               type="button"
-              onClick={() => setForm(f => ({ ...f, isOpenOverride: true }))}
+              onClick={() => chooseOpenOverride(true)}
               className={`p-4 rounded-2xl border text-left transition-all ${
                 form.isOpenOverride === true
                   ? 'border-green-500 bg-green-50 text-slate-900 ring-2 ring-green-400'
@@ -521,7 +532,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
 
             <button
               type="button"
-              onClick={() => setForm(f => ({ ...f, isOpenOverride: false }))}
+              onClick={() => chooseOpenOverride(false)}
               className={`p-4 rounded-2xl border text-left transition-all ${
                 form.isOpenOverride === false
                   ? 'border-red-500 bg-red-50 text-slate-900 ring-2 ring-red-400'

@@ -92,7 +92,7 @@ export const orderService = {
     if (updates.feedback !== undefined) payload.feedback = updates.feedback;
     if (updates.cancellationReason !== undefined) payload.cancellation_reason = updates.cancellationReason;
     if (updates.cancelledAt !== undefined) payload.cancelled_at = updates.cancelledAt;
-    if (updates.completedAt !== undefined) {
+    if (updates.completedAt) {
       payload.estimated_arrival = updates.completedAt;
       const completedNote = `[Concluído em: ${updates.completedAt}]`;
       if (payload.feedback) {
@@ -104,7 +104,7 @@ export const orderService = {
       }
     }
 
-    if (updates.completedAt !== undefined) {
+    if (updates.completedAt) {
       payload.completed_at = updates.completedAt;
     }
     if (updates.isForceActivated !== undefined) payload.is_force_activated = updates.isForceActivated;
