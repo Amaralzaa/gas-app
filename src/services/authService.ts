@@ -203,7 +203,13 @@ export const authService = {
     await supabase.auth.signOut();
   },
 
-  async getProfileForUser(userId: string, userEmail?: string, userMeta?: any): Promise<AppUser> {
+  /** Perfil confirmado no banco. Não inventa papel quando a linha não existe. */
+  async loadConfirmedProfile(userId: string, userEmail?: string, userMeta?: any): Promise<AppUser | null> {
+    const profile = await this.getProfileForUser(userId, userEmail, userMeta, false);
+    return profile;
+  },
+
+  async getProfileForUser(userId: string, userEmail?: string, userMeta?: any, allowFallback = true): Promise<AppUser | null> {
     let localName = '';
     try {
       localName = localStorage.getItem('gas_app_customer_name') || '';
@@ -275,10 +281,10 @@ export const authService = {
         };
       }
 
-      return fallbackUser;
+      return allowFallback ? fallbackUser : null;
     } catch (e) {
       console.warn('Profile fetch (usando fallback seguro):', e);
-      return fallbackUser;
+      return allowFallback ? fallbackUser : null;
     }
   },
 

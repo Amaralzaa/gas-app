@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   MapPin, 
   ShoppingCart, 
@@ -57,62 +57,93 @@ import {
 
 // --- Components ---
 
-const LoginView = ({ 
-  onLogin, 
-  onRegister, 
-  businessInfo 
-}: { 
-  onLogin: (user: AppUser) => void; 
-  onRegister: (user: AppUser) => void; 
-  businessInfo?: BusinessInfo; 
+type LoginIntent = 'cliente' | 'equipe';
+
+/** Reservado para o login de cliente por e-mail. Ainda sem tela. */
+type CustomerCredential =
+  | { method: 'phone'; phone: string }
+  | { method: 'email'; email: string; password: string };
+
+function loginPathFromLocation(): LoginIntent {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  return path === '/equipe' ? 'equipe' : 'cliente';
+}
+
+async function authenticateCustomer(credential: CustomerCredential) {
+  if (credential.method === 'email') {
+    throw new Error('Login de cliente por e-mail ainda não está disponível.');
+  }
+  const cleanPhone = credential.phone.replace(/\D/g, '');
+  if (!cleanPhone || cleanPhone.length < 10) {
+    throw new Error('Insira um número de telefone válido com DDD.');
+  }
+  const authUser = await authService.loginWithPhone(cleanPhone);
+  if (!authUser || !('id' in authUser)) throw new Error('Não foi possível entrar.');
+  return authUser;
+}
+
+function goToLoginPath(path: '/equipe' | '/') {
+  if (window.location.pathname !== path) {
+    window.history.pushState({}, '', path);
+  }
+  window.dispatchEvent(new PopStateEvent('popstate'));
+}
+
+const LoginBrand = ({ businessInfo }: { businessInfo?: BusinessInfo }) => (
+  <div className="text-center mb-8">
+    {businessInfo?.logoUrl ? (
+      <div className="w-20 h-20 mx-auto rounded-3xl overflow-hidden border-2 border-yellow-400 bg-white flex items-center justify-center mb-4 shadow-xl">
+        <img src={businessInfo.logoUrl} alt={businessInfo.name || 'Logo'} className="w-full h-full object-cover" />
+      </div>
+    ) : (
+      <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3 shadow-lg">
+        <Truck className="text-slate-900 w-10 h-10" />
+      </div>
+    )}
+    <h1 className="text-3xl font-black text-slate-900 uppercase leading-tight">
+      {businessInfo?.name || 'GÁS EXPRESS'}
+    </h1>
+  </div>
+);
+
+const LoginView = ({
+  intent,
+  businessInfo,
+  onAuthenticate,
+  onDemoLogin,
+}: {
+  intent: LoginIntent;
+  businessInfo?: BusinessInfo;
+  onAuthenticate: (intent: LoginIntent, authUser: { id: string; email?: string; user_metadata?: any }) => Promise<void>;
+  onDemoLogin?: (user: AppUser) => void;
 }) => {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
-  const [loginMethod, setLoginMethod] = useState<'phone' | 'email'>('phone'); 
   const [error, setError] = useState('');
+  const [showTeamLink, setShowTeamLink] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setShowTeamLink(false);
     setLoading(true);
 
     try {
-      let authUser: any = null;
-
-      if (loginMethod === 'email') {
+      if (intent === 'equipe') {
         if (!email.trim() || !password.trim()) throw new Error('E-mail e senha são obrigatórios.');
-        try {
-          authUser = await authService.login(email, password);
-        } catch (authErr: any) {
-          if (import.meta.env.DEV) {
-            const found = MOCK_USERS.find(u => u.email.toLowerCase() === email.toLowerCase());
-            if (found) {
-              onLogin(found);
-              return;
-            }
-          }
-          throw authErr;
-        }
-      } else {
-        const cleanPhone = phone.replace(/\D/g, '');
-        if (!cleanPhone || cleanPhone.length < 10) {
-          throw new Error('Insira um número de telefone válido com DDD.');
-        }
-        
-        try {
-          authUser = await authService.loginWithPhone(cleanPhone);
-        } catch (authErr: any) {
-          throw new Error(authErr.message || 'Erro ao fazer login com este número. Verifique sua conexão.');
-        }
+        const authUser = await authService.login(email.trim(), password);
+        if (!authUser || !('id' in authUser)) throw new Error('Não foi possível entrar.');
+        await onAuthenticate('equipe', authUser);
+        return;
       }
 
-      if (authUser) {
-        const fullProfile = await authService.getProfileForUser(authUser.id, authUser.email, authUser.user_metadata);
-        onLogin(fullProfile);
-      }
+      const credential: CustomerCredential = { method: 'phone', phone };
+      const authUser = await authenticateCustomer(credential);
+      await onAuthenticate('cliente', authUser);
     } catch (err: any) {
+      if (err?.teamAccess) setShowTeamLink(true);
       setError(err.message || 'Erro ao processar solicitação.');
     } finally {
       setLoading(false);
@@ -121,56 +152,25 @@ const LoginView = ({
 
   return (
     <div className="h-full w-full bg-slate-900 flex items-center justify-center p-4 overflow-y-auto">
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-8"
       >
-        <div className="text-center mb-8">
-          {businessInfo?.logoUrl ? (
-            <div className="w-20 h-20 mx-auto rounded-3xl overflow-hidden border-2 border-yellow-400 bg-white flex items-center justify-center mb-4 shadow-xl">
-              <img 
-                src={businessInfo.logoUrl} 
-                alt={businessInfo.name || 'Logo'} 
-                className="w-full h-full object-cover" 
-              />
-            </div>
-          ) : (
-            <div className="bg-yellow-400 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 rotate-3 shadow-lg">
-              <Truck className="text-slate-900 w-10 h-10" />
-            </div>
-          )}
-          <h1 className="text-3xl font-black text-slate-900 uppercase">
-            {businessInfo?.name || 'GÁS EXPRESS'}
-          </h1>
-          <p className="text-slate-500 font-medium">Acesse sua conta para continuar</p>
-        </div>
-
-        <div className="flex gap-2 mb-6 bg-slate-100 p-1 rounded-xl">
-          <button 
-            type="button"
-            onClick={() => setLoginMethod('phone')}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-          >
-            SOU CLIENTE
-          </button>
-          <button 
-            type="button"
-            onClick={() => setLoginMethod('email')}
-            className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${loginMethod === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500'}`}
-          >
-            EQUIPE
-          </button>
-        </div>
+        <LoginBrand businessInfo={businessInfo} />
+        <p className="text-slate-500 font-medium text-center -mt-4 mb-6">
+          {intent === 'equipe' ? 'Acesso da equipe' : 'Acesse sua conta para continuar'}
+        </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {loginMethod === 'email' ? (
+          {intent === 'equipe' ? (
             <>
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">E-mail</label>
-                <input 
+                <input
                   required
-                  type="email" 
+                  type="email"
+                  autoComplete="username"
                   className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
                   placeholder="seu@email.com"
                   value={email}
@@ -179,23 +179,26 @@ const LoginView = ({
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Senha</label>
-                <input 
+                <input
                   required
-                  type="password" 
+                  type="password"
+                  autoComplete="current-password"
                   className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-                <p className="text-[10px] text-slate-400 mt-2 ml-1">Gestor e entregador entram com e-mail e senha. O papel vem do cadastro, não deste botão.</p>
+                <p className="text-[10px] text-slate-400 mt-2 ml-1">Gestor e entregador entram com e-mail e senha. O acesso segue o cadastro.</p>
               </div>
             </>
           ) : (
             <div>
               <label className="block text-xs font-bold text-slate-400 uppercase mb-1 ml-1">Seu WhatsApp</label>
-              <input 
+              <input
                 required
-                type="tel" 
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
                 className="w-full p-4 bg-slate-50 rounded-2xl border-none focus:ring-2 focus:ring-yellow-400 outline-none transition-all"
                 placeholder="(21) 99999-9999"
                 value={phone}
@@ -206,10 +209,17 @@ const LoginView = ({
           )}
 
           {error && (
-            <p className="text-red-500 text-xs font-bold bg-red-50 p-3 rounded-xl">{error}</p>
+            <div className="text-red-600 text-xs font-bold bg-red-50 p-3 rounded-xl space-y-2">
+              <p>{error}</p>
+              {showTeamLink && (
+                <a href="/equipe" onClick={(e) => { e.preventDefault(); goToLoginPath('/equipe'); }} className="inline-block text-slate-700 underline">
+                  Ir para o acesso da equipe
+                </a>
+              )}
+            </div>
           )}
 
-          <button 
+          <button
             type="submit"
             disabled={loading}
             className="w-full bg-slate-900 text-white font-black py-4 mt-2 rounded-2xl shadow-lg hover:bg-slate-800 transition-all active:scale-[0.98] disabled:opacity-50 cursor-pointer"
@@ -217,42 +227,37 @@ const LoginView = ({
             {loading ? 'CARREGANDO...' : 'ENTRAR NO APLICATIVO'}
           </button>
 
-          {import.meta.env.DEV && (
-          <div className="pt-4 border-t border-slate-100 text-center">
-            <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Acesso Rápido para Demonstração</p>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  const gestor = MOCK_USERS.find(u => u.role === 'gestor');
-                  if (gestor) onLogin(gestor);
-                }}
-                className="py-2.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
+          {intent === 'cliente' ? (
+            <p className="text-center pt-3">
+              <a
+                href="/equipe"
+                onClick={(e) => { e.preventDefault(); goToLoginPath('/equipe'); }}
+                className="text-xs text-slate-400 hover:text-slate-600"
               >
-                👤 Gestor
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const entregador = MOCK_USERS.find(u => u.role === 'entregador');
-                  if (entregador) onLogin(entregador);
-                }}
-                className="py-2.5 px-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
+                Entrar como equipe
+              </a>
+            </p>
+          ) : (
+            <p className="text-center pt-3">
+              <a
+                href="/"
+                onClick={(e) => { e.preventDefault(); goToLoginPath('/'); }}
+                className="text-xs text-slate-400 hover:text-slate-600"
               >
-                🛵 Entregador
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const cliente = MOCK_USERS.find(u => u.role === 'cliente');
-                  if (cliente) onLogin(cliente);
-                }}
-                className="py-2.5 px-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-xl text-[11px] font-black transition-colors cursor-pointer"
-              >
-                ⭐ Cliente
-              </button>
+                Voltar ao login do cliente
+              </a>
+            </p>
+          )}
+
+          {import.meta.env.DEV && intent === 'cliente' && onDemoLogin && (
+            <div className="pt-4 border-t border-slate-100 text-center">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-wider mb-2">Acesso Rápido para Demonstração</p>
+              <div className="grid grid-cols-3 gap-2">
+                <button type="button" onClick={() => { const gestor = MOCK_USERS.find(u => u.role === 'gestor'); if (gestor) onDemoLogin(gestor); }} className="py-2.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-[11px] font-black">Gestor</button>
+                <button type="button" onClick={() => { const entregador = MOCK_USERS.find(u => u.role === 'entregador'); if (entregador) onDemoLogin(entregador); }} className="py-2.5 px-2 bg-blue-100 hover:bg-blue-200 text-blue-900 rounded-xl text-[11px] font-black">Entregador</button>
+                <button type="button" onClick={() => { const cliente = MOCK_USERS.find(u => u.role === 'cliente'); if (cliente) onDemoLogin(cliente); }} className="py-2.5 px-2 bg-yellow-100 hover:bg-yellow-200 text-yellow-900 rounded-xl text-[11px] font-black">Cliente</button>
+              </div>
             </div>
-          </div>
           )}
         </form>
       </motion.div>
@@ -362,6 +367,9 @@ export default function App() {
   const [referrals, setReferrals] = useState<Referral[]>(MOCK_REFERRALS);
   const [initialTab, setInitialTab] = useState<'home' | 'history' | 'referral' | 'profile' | 'tracking'>('home');
   const [loading, setLoading] = useState(true); // true = aguardando restauração de sessão
+  const [loginIntent, setLoginIntent] = useState<LoginIntent>(loginPathFromLocation);
+  const formLoginActive = useRef(false);
+  const blockedSessionUserId = useRef<string | null>(null);
 
   // Sincronização em tempo real entre abas do navegador (Cliente <-> Gestor <-> Entregador)
   useEffect(() => {
@@ -471,52 +479,35 @@ export default function App() {
           const su = session.user;
           setTimeout(async () => {
             if (cancelled) return;
+            if (formLoginActive.current || blockedSessionUserId.current === su.id) {
+              clearTimeout(safetyTimeout);
+              if (!cancelled) setLoading(false);
+              return;
+            }
           try {
-            // Deep-link: login automático via phone param
+            let userId = su.id;
+            let userEmail = su.email;
+            let userMeta = su.user_metadata;
             if (phoneParam && event === 'INITIAL_SESSION') {
-              // Se veio pelo link de rastreamento, garante que o usuário correto seja carregado
-              const linkedUser = await authService.loginWithPhone(phoneParam).catch(() => session.user);
-              const appUser = await authService.getProfileForUser(
-                (linkedUser || session.user).id,
-                session.user.email,
-                session.user.user_metadata
-              );
-              if (!cancelled) {
-                const userWithCode = {
-                  ...appUser,
-                  referralCode: appUser.referralCode || codeService.getUserReferralCode(appUser)
-                };
-                setCurrentUser(userWithCode);
-              }
-            } else {
-              const appUser = await authService.getProfileForUser(
-                su.id, su.email, su.user_metadata
-              );
-              if (!cancelled) {
-                const userWithCode = {
-                  ...appUser,
-                  referralCode: appUser.referralCode || codeService.getUserReferralCode(appUser)
-                };
-                setCurrentUser(userWithCode);
+              const linkedUser = await authService.loginWithPhone(phoneParam).catch(() => null);
+              if (linkedUser) {
+                userId = linkedUser.id;
+                userEmail = linkedUser.email;
+                userMeta = linkedUser.user_metadata;
               }
             }
+            const appUser = await authService.loadConfirmedProfile(userId, userEmail, userMeta);
+            if (cancelled || formLoginActive.current || blockedSessionUserId.current === userId) return;
+            if (!appUser) {
+              await authService.signOut();
+              return;
+            }
+            setCurrentUser({
+              ...appUser,
+              referralCode: appUser.referralCode || codeService.getUserReferralCode(appUser)
+            });
           } catch (profileErr) {
-            console.warn('Profile fetch fallback:', profileErr);
-            // Cria objeto mínimo para não bloquear acesso
-            if (!cancelled) {
-              const minimalUser: AppUser = {
-                id: su.id,
-                email: su.email,
-                role: 'cliente',
-                name: su.user_metadata?.name || 'Usuário',
-                phone: su.user_metadata?.phone,
-                points: 0,
-                addresses: [],
-                allowedTabs: []
-              };
-              minimalUser.referralCode = codeService.getUserReferralCode(minimalUser);
-              setCurrentUser(minimalUser);
-            }
+            console.warn('Profile fetch:', profileErr);
           } finally {
             clearTimeout(safetyTimeout);
             if (!cancelled) setLoading(false);
@@ -535,14 +526,59 @@ export default function App() {
       if (!cancelled) setLoading(false);
     }
 
+    const onPopState = () => setLoginIntent(loginPathFromLocation());
+    window.addEventListener('popstate', onPopState);
+
     return () => {
       cancelled = true;
       clearTimeout(safetyTimeout);
+      window.removeEventListener('popstate', onPopState);
       if (authSubscription && typeof authSubscription.unsubscribe === 'function') {
         authSubscription.unsubscribe();
       }
     };
   }, []);
+
+  const openAuthenticatedPortal = (profile: AppUser) => {
+    blockedSessionUserId.current = null;
+    setCurrentUser({
+      ...profile,
+      referralCode: profile.referralCode || codeService.getUserReferralCode(profile)
+    });
+  };
+
+  const authenticateFromPage = async (
+    intent: LoginIntent,
+    authUser: { id: string; email?: string; user_metadata?: any }
+  ) => {
+    formLoginActive.current = true;
+    try {
+      const profile = await authService.loadConfirmedProfile(authUser.id, authUser.email, authUser.user_metadata);
+      if (!profile) {
+        blockedSessionUserId.current = authUser.id;
+        await authService.signOut();
+        throw new Error('Não foi possível confirmar o perfil desta conta.');
+      }
+
+      const isTeam = profile.role === 'gestor' || profile.role === 'entregador';
+      if (intent === 'equipe' && !isTeam) {
+        blockedSessionUserId.current = authUser.id;
+        await authService.signOut();
+        throw new Error('Esta conta não tem acesso de equipe.');
+      }
+      if (intent === 'cliente' && profile.role !== 'cliente') {
+        blockedSessionUserId.current = authUser.id;
+        await authService.signOut();
+        const error = new Error('Esta conta é da equipe. Use o acesso da equipe.') as Error & { teamAccess?: boolean };
+        error.teamAccess = true;
+        throw error;
+      }
+
+      openAuthenticatedPortal(profile);
+    } finally {
+      formLoginActive.current = false;
+    }
+  };
 
 
   // Fetch initial data when user is logged in and maintain live polling
@@ -1104,7 +1140,14 @@ export default function App() {
 
 
   if (!currentUser) {
-    return <LoginView onLogin={(user) => setCurrentUser(user)} onRegister={(user) => setCurrentUser(user)} businessInfo={businessInfo} />;
+    return (
+      <LoginView
+        intent={loginIntent}
+        businessInfo={businessInfo}
+        onAuthenticate={authenticateFromPage}
+        onDemoLogin={openAuthenticatedPortal}
+      />
+    );
   }
 
   return (
