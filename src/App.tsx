@@ -560,16 +560,20 @@ export default function App() {
   // Fetch initial data when user is logged in and maintain live polling
   useEffect(() => {
     if (currentUser) {
-      loadData();
+      loadData(true);
       
-      // Polling contínuo a cada 2 segundos para sincronizar pedidos novos em tempo real entre todos os dispositivos
+      // Polling contínuo: sincroniza pedidos e usuários a cada 2s para tempo real
+      // e faz sync completo de dados operacionais (bairros, despesas, produtos, etc.) a cada ~30s
+      let tickCount = 0;
       const pollInterval = setInterval(() => {
-        loadData();
+        tickCount++;
+        const isSlowTick = tickCount % 15 === 0;
+        loadData(isSlowTick);
       }, 2000);
 
       try {
         const orderSub = orderService.subscribeToOrders(() => {
-          loadData();
+          loadData(false);
         });
 
         return () => {
@@ -583,42 +587,89 @@ export default function App() {
     }
   }, [currentUser?.id]);
 
-  const loadData = async () => {
+  const loadData = async (fullSync: boolean = true) => {
     try {
-      const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals, fetchedBusiness, fetchedProducts] = await Promise.all([
-        orderService.getOrders().catch(() => []),
-        expenseService.getExpenses().catch(() => []),
-        userService.getProfiles().catch(() => []),
-        coverageService.getCoverageAreas().catch(() => []),
-        referralService.getReferrals().catch(() => []),
-        businessService.getBusinessInfo().catch(() => DEFAULT_BUSINESS_INFO),
-        productService.getProducts().catch(() => PRODUCTS)
-      ]);
-      setOrders(fetchedOrders || []);
-      localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders || []));
+      if (fullSync) {
+        const [fetchedOrders, fetchedExpenses, fetchedUsers, fetchedCoverage, fetchedReferrals, fetchedBusiness, fetchedProducts] = await Promise.all([
+          orderService.getOrders().catch(() => []),
+          expenseService.getExpenses().catch(() => []),
+          userService.getProfiles().catch(() => []),
+          coverageService.getCoverageAreas().catch(() => []),
+          referralService.getReferrals().catch(() => []),
+          businessService.getBusinessInfo().catch(() => DEFAULT_BUSINESS_INFO),
+          productService.getProducts().catch(() => PRODUCTS)
+        ]);
 
-      setExpenses(fetchedExpenses || []);
-      localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses || []));
-
-      const rawUsers = fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS;
-      const usersWithReferral = rawUsers.map(u => ({
-        ...u,
-        referralCode: u.referralCode || codeService.getUserReferralCode(u)
-      }));
-      setAllUsers(usersWithReferral);
-      setReferrals(fetchedReferrals || []);
-      if (fetchedCoverage && fetchedCoverage.length > 0) {
-        setCoverageAreas(fetchedCoverage);
-      }
-      if (fetchedBusiness) {
-        setBusinessInfo(prev => {
-          if (JSON.stringify(prev) === JSON.stringify(fetchedBusiness)) return prev;
-          return fetchedBusiness;
+        setOrders(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(fetchedOrders)) return prev;
+          return fetchedOrders || [];
         });
-      }
-      if (fetchedProducts && fetchedProducts.length > 0) {
-        setProducts(fetchedProducts);
-        localStorage.setItem('gas_app_products', JSON.stringify(fetchedProducts));
+        localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders || []));
+
+        setExpenses(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(fetchedExpenses)) return prev;
+          return fetchedExpenses || [];
+        });
+        localStorage.setItem('gas_app_expenses', JSON.stringify(fetchedExpenses || []));
+
+        const rawUsers = fetchedUsers && fetchedUsers.length > 0 ? fetchedUsers : MOCK_USERS;
+        const usersWithReferral = rawUsers.map(u => ({
+          ...u,
+          referralCode: u.referralCode || codeService.getUserReferralCode(u)
+        }));
+        setAllUsers(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(usersWithReferral)) return prev;
+          return usersWithReferral;
+        });
+
+        setReferrals(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(fetchedReferrals)) return prev;
+          return fetchedReferrals || [];
+        });
+
+        if (fetchedCoverage && fetchedCoverage.length > 0) {
+          setCoverageAreas(prev => {
+            if (JSON.stringify(prev) === JSON.stringify(fetchedCoverage)) return prev;
+            return fetchedCoverage;
+          });
+        }
+        if (fetchedBusiness) {
+          setBusinessInfo(prev => {
+            if (JSON.stringify(prev) === JSON.stringify(fetchedBusiness)) return prev;
+            return fetchedBusiness;
+          });
+        }
+        if (fetchedProducts && fetchedProducts.length > 0) {
+          setProducts(prev => {
+            if (JSON.stringify(prev) === JSON.stringify(fetchedProducts)) return prev;
+            return fetchedProducts;
+          });
+          localStorage.setItem('gas_app_products', JSON.stringify(fetchedProducts));
+        }
+      } else {
+        // Fast sync: apenas pedidos e usuários para tempo real leve e ágil
+        const [fetchedOrders, fetchedUsers] = await Promise.all([
+          orderService.getOrders().catch(() => []),
+          userService.getProfiles().catch(() => [])
+        ]);
+
+        setOrders(prev => {
+          if (JSON.stringify(prev) === JSON.stringify(fetchedOrders)) return prev;
+          return fetchedOrders || [];
+        });
+        localStorage.setItem('gas_app_orders', JSON.stringify(fetchedOrders || []));
+
+        if (fetchedUsers && fetchedUsers.length > 0) {
+          const rawUsers = fetchedUsers;
+          const usersWithReferral = rawUsers.map(u => ({
+            ...u,
+            referralCode: u.referralCode || codeService.getUserReferralCode(u)
+          }));
+          setAllUsers(prev => {
+            if (JSON.stringify(prev) === JSON.stringify(usersWithReferral)) return prev;
+            return usersWithReferral;
+          });
+        }
       }
     } catch (err) {
       console.warn('Usando dados sincronizados locais:', err);

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   MapPin, 
   History, 
@@ -483,7 +483,20 @@ const HistoryCard: React.FC<{
 
 const CustomerCoverageFit: React.FC<{ coverageAreas: CoverageArea[] }> = ({ coverageAreas }) => {
   const map = useMap();
+  const hasInitialFitRef = useRef(false);
+  const prevAreasSignatureRef = useRef<string>('');
+
   useEffect(() => {
+    const areasSignature = coverageAreas.map(a => a.id).sort().join(',');
+    const isFirstMount = !hasInitialFitRef.current;
+    const areasChanged = prevAreasSignatureRef.current !== areasSignature;
+
+    // Se o mapa já foi enquadrado inicialmente e a lista de bairros não mudou,
+    // NÃO reposiciona a câmera para respeitar o zoom e navegação do cliente.
+    if (!isFirstMount && !areasChanged) {
+      return;
+    }
+
     const valid = coverageAreas
       .map(a => a.boundary || (a.center ? createCirclePolygon(a.center.lat, a.center.lng, 1.2) : null))
       .filter(Boolean);
@@ -494,6 +507,8 @@ const CustomerCoverageFit: React.FC<{ coverageAreas: CoverageArea[] }> = ({ cove
         const bounds = group.getBounds();
         if (bounds.isValid()) {
           map.fitBounds(bounds, { padding: [35, 35], animate: true });
+          hasInitialFitRef.current = true;
+          prevAreasSignatureRef.current = areasSignature;
         }
       } catch (e) {
         console.error("Erro ao enquadrar mapa de cobertura do cliente:", e);

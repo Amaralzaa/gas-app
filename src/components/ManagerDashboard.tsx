@@ -195,8 +195,28 @@ const CoverageMapController: React.FC<{
   coverageAreas: CoverageArea[];
 }> = ({ selectedArea, coverageAreas }) => {
   const map = useMap();
+  const hasInitialFitRef = useRef(false);
+  const prevSelectedIdRef = useRef<string | null | undefined>(undefined);
+  const prevAreasSignatureRef = useRef<string>('');
 
   useEffect(() => {
+    const areasSignature = coverageAreas.map(a => a.id).sort().join(',');
+    const isFirstMount = !hasInitialFitRef.current;
+    const currentSelectedId = selectedArea?.id ?? null;
+    const selectedChanged = prevSelectedIdRef.current !== currentSelectedId;
+    const areasChanged = prevAreasSignatureRef.current !== areasSignature;
+
+    // Se o mapa já teve seu enquadramento inicial, e o usuário NÃO trocou de bairro selecionado,
+    // e a lista de bairros não foi alterada (sem adição/remoção), NÃO reposiciona a câmera.
+    // Isso garante que o zoom e pan manuais do usuário não sejam desfeitos (evita o zoom-out involuntário).
+    if (!isFirstMount && !selectedChanged && !areasChanged) {
+      return;
+    }
+
+    hasInitialFitRef.current = true;
+    prevSelectedIdRef.current = currentSelectedId;
+    prevAreasSignatureRef.current = areasSignature;
+
     // 1. Se houver um bairro específico selecionado
     if (selectedArea) {
       if (selectedArea.boundary) {
