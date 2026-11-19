@@ -77,43 +77,62 @@ export const authService = {
     const internalPassword = `GasPhoneAuth${cleanPhone}`;
 
     try {
-      // Try to login
-      const { data, error: loginError } = await supabase.auth.signInWithPassword({
-        email: internalEmail,
-        password: internalPassword,
-      });
+      const knownKey = `gas_phone_account_${cleanPhone}`;
+      let known = false;
+      try { known = localStorage.getItem(knownKey) === '1'; } catch {}
 
-      if (!loginError && data.user) return data.user;
+      if (known) {
+        const { data, error: loginError } = await supabase.auth.signInWithPassword({
+          email: internalEmail,
+          password: internalPassword,
+        });
+        if (!loginError && data.user) return data.user;
+      }
 
-      // If login fails (user not found), try to sign up
+      // Cadastro primeiro: o signIn de quem ainda não existe responde 400 e polui o console.
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: internalEmail,
         password: internalPassword,
         options: {
           data: {
             phone: cleanPhone,
-            role: 'cliente' as UserRole
+            name: 'Cliente'
           }
         }
       });
 
-      if (signUpError) throw signUpError;
+      const alreadyRegistered = !!signUpError && (
+        (signUpError as any).status === 422 ||
+        /already registered|already exists|already been registered|user_already_exists/i.test(`${signUpError.message || ''} ${(signUpError as any).code || ''}`)
+      );
+      if (signUpError && !alreadyRegistered) throw signUpError;
 
-      if (signUpData.user && !signUpData.session) {
-        throw new Error('Conta criada, mas o Supabase ainda exige confirmação de e-mail. Em Authentication > Providers > Email, desligue "Confirm email" para o cliente entrar só com o WhatsApp.');
-      }
+      const remember = () => { try { localStorage.setItem(knownKey, '1'); } catch {} };
 
-      if (signUpData.user) {
+      const signUpIsNew = !signUpError && !!signUpData.session && !!signUpData.user;
+      if (signUpIsNew && signUpData.user) {
         const { error: profileError } = await supabase.from('profiles').update({
           phone: cleanPhone,
         }).eq('id', signUpData.user.id);
-
         if (profileError) {
-          console.error('Não foi possível gravar o telefone no perfil (aplique a migration se o perfil ainda não existir).', profileError);
+          console.error('Não foi possível gravar o telefone no perfil.', profileError);
         }
+        remember();
+        return signUpData.user;
       }
 
-      return signUpData.user;
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: internalEmail,
+        password: internalPassword,
+      });
+      if (loginError) {
+        if (/email not confirmed/i.test(loginError.message || '')) {
+          throw new Error('Conta criada, mas o Supabase ainda exige confirmação de e-mail. Em Authentication > Providers > Email, desligue "Confirm email" para o cliente entrar só com o WhatsApp.');
+        }
+        throw loginError;
+      }
+      remember();
+      return data.user;
     } catch (error) {
       console.error('Error in loginWithPhone:', error);
       throw error;

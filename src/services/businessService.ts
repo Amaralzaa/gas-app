@@ -128,53 +128,49 @@ export const businessService = {
     return DEFAULT_BUSINESS_INFO;
   },
 
-  async saveBusinessInfo(info: BusinessInfo): Promise<void> {
-    // 1. Salva no localStorage imediatamente
+  async saveBusinessInfo(info: BusinessInfo): Promise<BusinessInfo> {
+    const payload: any = {
+      id: 'default',
+      name: info.name,
+      trade_name: info.tradeName || '',
+      cnpj: info.cnpj || '',
+      phone: info.phone,
+      whatsapp: info.whatsapp || '',
+      email: info.email || '',
+      logo_url: info.logoUrl || null,
+      address: info.address,
+      opening_hours: info.openingHours,
+      is_open_override: info.isOpenOverride ?? null,
+      min_order_value: info.minOrderValue ?? null,
+      delivery_fee: info.deliveryFee ?? null,
+      delivery_periods: info.deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
+      updated_at: new Date().toISOString()
+    };
+
+    const { error } = await supabase
+      .from('business_settings')
+      .upsert(payload);
+
+    if (error) {
+      throw new Error(error.message || 'Não foi possível gravar os dados da loja.');
+    }
+
+    const saved = await this.getBusinessInfo();
+    const wanted = info.isOpenOverride ?? null;
+    const got = saved.isOpenOverride ?? null;
+    if (wanted !== got) {
+      throw new Error(`O status da loja não foi confirmado no banco (enviado: ${String(wanted)}, lido: ${String(got)}).`);
+    }
+
     try {
-      localStorage.setItem('gas_app_business_settings', JSON.stringify(info));
+      localStorage.setItem('gas_app_business_settings', JSON.stringify(saved));
       const ch = new BroadcastChannel('gas_app_sync_channel');
-      ch.postMessage({ type: 'SYNC_BUSINESS_INFO', businessInfo: info });
+      ch.postMessage({ type: 'SYNC_BUSINESS_INFO', businessInfo: saved });
       ch.close();
-      window.dispatchEvent(new CustomEvent('gas_app_business_info_updated', { detail: info }));
+      window.dispatchEvent(new CustomEvent('gas_app_business_info_updated', { detail: saved }));
     } catch {}
 
-    // 2. Persiste no Supabase
-    try {
-      const payload: any = {
-        id: 'default',
-        name: info.name,
-        trade_name: info.tradeName || '',
-        cnpj: info.cnpj || '',
-        phone: info.phone,
-        whatsapp: info.whatsapp || '',
-        email: info.email || '',
-        logo_url: info.logoUrl || null,
-        address: info.address,
-        opening_hours: info.openingHours,
-        is_open_override: info.isOpenOverride,
-        min_order_value: info.minOrderValue ?? null,
-        delivery_fee: info.deliveryFee ?? null,
-        delivery_periods: info.deliveryPeriods || DEFAULT_DELIVERY_PERIODS,
-        updated_at: new Date().toISOString()
-      };
-
-      const { error } = await supabase
-        .from('business_settings')
-        .upsert(payload);
-
-      if (error) {
-        console.warn('Aviso: Tabela business_settings ainda não possui a coluna ou não existe no Supabase. Salvo no cache local compartilhado.', error.message);
-        if (error.message?.includes('delivery_periods') || error.code === '42703') {
-          const fallbackPayload = { ...payload };
-          delete fallbackPayload.delivery_periods;
-          try {
-            await supabase.from('business_settings').upsert(fallbackPayload);
-          } catch {}
-        }
-      }
-    } catch (err) {
-      console.warn('Erro ao salvar business_settings no Supabase:', err);
-    }
+    return saved;
   },
 
   getValidPeriodsForDay(dayHours: DayHours | undefined, allPeriods?: DeliveryPeriod[]): DeliveryPeriod[] {

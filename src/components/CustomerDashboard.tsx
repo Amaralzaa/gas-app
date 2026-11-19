@@ -856,11 +856,9 @@ export const CustomerDashboard: React.FC<CustomerDashboardProps> = ({
     return businessService.isStoreCurrentlyOpen(businessInfo);
   }, [businessInfo]);
 
-  // Se a loja estiver fechada para pedidos imediatos, seleciona agendamento por padrão
+  // Loja fechada só aceita agendamento. Quando abre (horário ou "forçar aberto"), volta ao pedido imediato.
   useEffect(() => {
-    if (!storeStatus.isOpen) {
-      setDeliveryType('scheduled');
-    }
+    setDeliveryType(storeStatus.isOpen ? 'immediate' : 'scheduled');
   }, [storeStatus.isOpen]);
 
   // Novos estados para extrato de pontos e modais de indicação

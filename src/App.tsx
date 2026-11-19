@@ -710,12 +710,9 @@ export default function App() {
   }, [currentUser?.id, currentUser?.addresses?.length, orders]);
 
   const handleUpdateBusinessInfo = async (newInfo: BusinessInfo) => {
-    setBusinessInfo(newInfo);
-    try {
-      await businessService.saveBusinessInfo(newInfo);
-    } catch (err) {
-      console.warn('Erro ao persistir businessInfo:', err);
-    }
+    const saved = await businessService.saveBusinessInfo(newInfo);
+    setBusinessInfo(saved);
+    return saved;
   };
 
   const handleLogout = async () => {

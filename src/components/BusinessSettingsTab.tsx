@@ -56,6 +56,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   const [isCropperOpen, setIsCropperOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (businessInfo && !isDirtyRef.current) {
@@ -211,13 +212,15 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSaving(true);
+    setSavedSuccess(false);
+    setSaveError(null);
     try {
       await onSave(formRef.current || form);
       isDirtyRef.current = false;
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
-    } catch (err) {
-      console.error('Erro ao salvar:', err);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Não foi possível salvar. Nada foi confirmado no banco.');
     } finally {
       setIsSaving(false);
     }
@@ -237,6 +240,10 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
           </div>
         </div>
 
+        <div className="flex flex-col items-stretch sm:items-end gap-2">
+        {saveError && (
+          <p className="text-xs font-bold text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2 max-w-sm">{saveError}</p>
+        )}
         <button
           type="button"
           onClick={handleSubmit}
@@ -255,6 +262,7 @@ export const BusinessSettingsTab: React.FC<BusinessSettingsTabProps> = ({
             </>
           )}
         </button>
+        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
