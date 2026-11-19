@@ -352,20 +352,22 @@ export default function App() {
 
   const [coverageAreas, setCoverageAreas] = useState<CoverageArea[]>(MOCK_COVERAGE_AREAS);
   const [allUsers, setAllUsers] = useState<AppUser[]>(MOCK_USERS);
-  const [coupons, setCoupons] = useState<Coupon[]>(MOCK_COUPONS);
+  const [coupons, setCoupons] = useState<Coupon[]>(import.meta.env.DEV ? MOCK_COUPONS : []);
   const [rewards, setRewards] = useState<Reward[]>(() => {
     try {
       const saved = localStorage.getItem('gas_app_rewards');
       if (saved) return JSON.parse(saved);
     } catch {}
-    return MOCK_REWARDS;
+    return import.meta.env.DEV ? MOCK_REWARDS : [];
   });
   const [benefitsConfig, setBenefitsConfig] = useState<BenefitsConfig>(() => {
     try {
       const saved = localStorage.getItem('gas_app_benefits_config');
       if (saved) return JSON.parse(saved);
     } catch {}
-    return MOCK_BENEFITS_CONFIG;
+    return import.meta.env.DEV
+      ? MOCK_BENEFITS_CONFIG
+      : { referralDiscountValue: 0, referralPointsAwarded: 0, pointsPerCurrency: 0, referralMinOrderValue: 0 };
   });
   const [businessInfo, setBusinessInfo] = useState<BusinessInfo>(() => {
     try {
