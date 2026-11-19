@@ -1,14 +1,134 @@
 @import "tailwindcss";
-@import "leaflet/dist/leaflet.css";
 
-/* Protect Leaflet map tiles from Tailwind's aggressive CSS reset */
+/* =============================================
+   LEAFLET + TAILWIND V4 FIX
+   Tailwind v4 preflight sets:
+     img { max-width: 100%; height: auto; }
+   This breaks Leaflet tiles completely.
+   These overrides MUST use !important.
+   ============================================= */
+
 .leaflet-container {
   width: 100% !important;
   height: 100% !important;
+  position: relative !important;
+  z-index: 0 !important;
+  isolation: isolate !important;
 }
 
-.leaflet-tile-pane img,
+/* Confine all Leaflet internal layers to low z-indices (1-10)
+   so that fixed UI elements like the bottom navigation bar (z-50)
+   and modals (z-70+) are ALWAYS rendered above the map when scrolling */
+.leaflet-pane {
+  z-index: 1 !important;
+}
+
+.leaflet-tile-pane {
+  z-index: 1 !important;
+}
+
+.leaflet-overlay-pane {
+  z-index: 2 !important;
+}
+
+.leaflet-shadow-pane {
+  z-index: 3 !important;
+}
+
+.leaflet-marker-pane {
+  z-index: 4 !important;
+}
+
+.leaflet-tooltip-pane {
+  z-index: 5 !important;
+}
+
+.leaflet-popup-pane {
+  z-index: 6 !important;
+}
+
+.leaflet-control {
+  z-index: 7 !important;
+}
+
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 10 !important;
+}
+
+/* Force tile images to render correctly */
+.leaflet-tile-pane img {
+  max-width: none !important;
+  max-height: none !important;
+  width: 256px !important;
+  height: 256px !important;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+  border: none !important;
+}
+
 .leaflet-marker-icon,
 .leaflet-marker-shadow {
   max-width: none !important;
 }
+
+/* =============================================
+   LAYOUT BASE & SCROLLBAR BLINDADA
+   ============================================= */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.4) transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+/* =============================================
+   ESTILOS DE IMPRESSÃO / SALVAR COMO PDF
+   ============================================= */
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #printable-fechamento, #printable-fechamento * {
+    visibility: visible !important;
+  }
+  #printable-fechamento {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100vw !important;
+    min-height: 100vh !important;
+    margin: 0 !important;
+    padding: 24px !important;
+    background: white !important;
+    color: #0f172a !important;
+    z-index: 999999 !important;
+  }
+}
+

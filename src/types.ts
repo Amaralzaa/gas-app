@@ -1,13 +1,22 @@
-export type OrderStatus = 'Pendente' | 'Em Rota' | 'Concluído' | 'Cancelado';
+export type OrderStatus = 'Pendente' | 'Atribuído' | 'Em Rota' | 'Concluído' | 'Cancelado';
 
 export interface Address {
   cep: string;
   street: string;
   number: string;
   complement?: string;
+  reference?: string;
   neighborhood: string;
   city: string;
   state: string;
+  lat?: number;
+  lng?: number;
+}
+
+export interface ProductDiscount {
+  enabled: boolean;
+  type: 'fixed' | 'percentage';
+  value: number; // Ex: 10 (R$ 10,00) ou 10 (10%)
 }
 
 export interface Product {
@@ -16,6 +25,14 @@ export interface Product {
   price: number;
   image: string;
   description: string;
+  category?: string;
+  unit?: string;
+  brand?: string;
+  isActive?: boolean;
+  pixDiscount?: ProductDiscount;
+  cashDiscount?: ProductDiscount;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface OrderItem {
@@ -41,6 +58,29 @@ export interface Order {
   createdAt: string;
   estimatedArrival?: string; // ISO string
   deliveryPersonLocation?: { lat: number; lng: number };
+  selectedFreebie?: string; // Nome do brinde selecionado
+  rating?: number; // 1 to 5 stars
+  serviceRating?: number; // Avaliação da Porto Gás (1-5)
+  deliveryRating?: number; // Avaliação do entregador (1-5)
+  feedback?: string;
+  cancellationReason?: string;
+  cancelledAt?: string;
+  completedAt?: string;
+  isScheduled?: boolean;
+  scheduledDate?: string;
+  scheduledDateISO?: string; // Formato YYYY-MM-DD
+  scheduledPeriod?: string;
+  scheduledPeriodName?: string;
+  scheduledTimeRange?: string;
+  isForceActivated?: boolean; // Forçado para fila de pendentes pelo gestor
+}
+
+export interface Freebie {
+  id: string;
+  name: string;
+  image: string;
+  isActive: boolean;
+  createdAt: string;
 }
 
 export interface Coupon {
@@ -63,8 +103,20 @@ export interface Reward {
   title: string;
   description: string;
   pointsCost: number;
-  type: 'discount' | 'free_product' | 'voucher';
+  type: 'discount' | 'free_item' | 'free_product' | 'cashback' | 'voucher';
+  productId?: string;
   value?: number;
+  validityDays?: number;
+  minOrderValue?: number;
+  rules?: string[];
+  isActive?: boolean;
+}
+
+export interface BenefitsConfig {
+  referralDiscountValue: number; // R$ de desconto para o amigo indicado (1º pedido)
+  referralPointsAwarded: number; // Pontos ganhos por indicação concluída
+  pointsPerCurrency: number; // Pontos ganhos por R$ 1,00 gasto em compras concluídas
+  referralMinOrderValue?: number; // Valor mínimo do pedido para aplicar cupom de indicação
 }
 
 export interface Expense {
@@ -82,11 +134,42 @@ export interface CoverageArea {
   city: string;
   allowedCeps: string[]; // List of CEP prefixes or specific CEPs
   center?: { lat: number; lng: number };
+  boundary?: any; // GeoJSON geometry
 }
 
 export type AppView = 'Cliente' | 'Gestor' | 'Entregador';
 
 export type UserRole = 'cliente' | 'gestor' | 'entregador' | 'admin';
+
+export interface PointHistoryItem {
+  id: string;
+  userId: string;
+  type: 'earned_order' | 'referral_bonus' | 'redeemed_reward' | 'adjustment';
+  points: number;
+  description: string;
+  orderId?: string;
+  createdAt: string;
+}
+
+export interface RedeemedReward {
+  id: string;
+  code: string; // Ex: 'RESG-9F2B8D'
+  rewardId: string;
+  rewardTitle: string;
+  rewardType: 'discount' | 'free_item' | 'free_product' | 'cashback' | 'voucher';
+  productId?: string;
+  discountValue?: number;
+  pointsCost: number;
+  minOrderValue?: number;
+  validUntil?: string;
+  userId: string;
+  userName?: string;
+  userPhone?: string;
+  status: 'active' | 'used';
+  redeemedAt: string;
+  usedAt?: string;
+  orderId?: string;
+}
 
 export interface AppUser {
   id: string;
@@ -101,9 +184,11 @@ export interface AppUser {
   location?: { lat: number; lng: number }; // For delivery persons
   lastMessageSentAt?: string; // ISO string
   allowedTabs?: string[]; // For granular access control (e.g. ['orders', 'map'])
+  pointHistory?: PointHistoryItem[];
+  redeemedRewards?: RedeemedReward[];
 }
 
-export type ReferralStatus = 'Pendente' | 'Validado' | 'Rejeitado';
+export type ReferralStatus = 'Pendente' | 'Validado' | 'Confirmado' | 'Rejeitado';
 
 export interface Referral {
   id: string;
@@ -117,4 +202,55 @@ export interface Referral {
   pointsAwarded: number;
   createdAt: string;
   validatedAt?: string;
+}
+
+export interface DayHours {
+  isOpen: boolean;
+  open: string;   // "08:00"
+  close: string;  // "19:00"
+}
+
+export interface OpeningHours {
+  monday: DayHours;
+  tuesday: DayHours;
+  wednesday: DayHours;
+  thursday: DayHours;
+  friday: DayHours;
+  saturday: DayHours;
+  sunday: DayHours;
+}
+
+export interface DeliveryPeriod {
+  id: string; // e.g. 'manha', 'tarde', 'noite' ou uuid
+  name: string; // e.g. 'Manhã', 'Tarde', 'Noite'
+  startTime: string; // e.g. '08:00'
+  endTime: string; // e.g. '13:00'
+  active: boolean;
+  icon?: string; // 'sun' | 'sunset' | 'moon' | 'clock' | string
+}
+
+export interface BusinessInfo {
+  id: string;
+  name: string;
+  tradeName?: string;
+  cnpj?: string;
+  phone: string;
+  whatsapp?: string;
+  email?: string;
+  logoUrl?: string;
+  address: {
+    street: string;
+    number: string;
+    neighborhood: string;
+    city: string;
+    state: string;
+    cep: string;
+    complement?: string;
+  };
+  openingHours: OpeningHours;
+  isOpenOverride?: boolean | null; // null = automático por horário, true = forçar aberto, false = forçar fechado
+  minOrderValue?: number;
+  deliveryFee?: number;
+  deliveryPeriods?: DeliveryPeriod[];
+  updatedAt?: string;
 }

@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import { AppUser, UserRole } from '../types';
+import { userService } from './userService';
 
 export const authService = {
   async getCurrentUser(): Promise<AppUser | null> {
@@ -14,51 +15,53 @@ export const authService = {
         .eq('id', user.id)
         .maybeSingle();
 
-      // Self-healing: If profile is missing but user is authenticated
+      let localName = '';
+      try {
+        localName = localStorage.getItem('gas_app_customer_name') || '';
+      } catch {}
+
+      const cachedAddresses = userService.getAddressCache(user.id);
+
+      // Sem perfil: o trigger do banco cria a linha. O cliente não escolhe o próprio papel.
       if (!profile || error) {
-        console.log('Profile missing or error, attempting self-healing creation...');
-        const newProfile = {
+        const resolvedName = (localName && localName.trim())
+          || user.user_metadata?.name
+          || 'Cliente';
+        return {
           id: user.id,
           email: user.email,
-          name: user.user_metadata?.name || 'Usuário',
-          role: (user.user_metadata?.role as UserRole) || 'cliente',
-          phone: user.user_metadata?.phone || '',
+          role: 'cliente',
+          name: resolvedName,
+          phone: user.user_metadata?.phone,
           points: 0,
-          addresses: [],
+          addresses: cachedAddresses,
           allowedTabs: []
         };
+      }
 
-        const { error: insertError } = await supabase
-          .from('profiles')
-          .upsert(newProfile);
+      const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')
+        ? profile.name
+        : (localName || profile.name || user.user_metadata?.name || 'Cliente');
 
-        if (insertError) {
-          console.error('Self-healing failed (RLS?):', insertError);
-          // Return a minimal user object even without a DB profile to allow the app to load
-          return {
-            id: user.id,
-            email: user.email,
-            role: (user.user_metadata?.role as UserRole) || 'cliente',
-            name: user.user_metadata?.name || 'Usuário',
-            phone: user.user_metadata?.phone,
-            points: 0,
-            addresses: [],
-            allowedTabs: []
-          };
-        }
-        return newProfile as AppUser;
+      const resolvedAddresses = (profile.addresses && profile.addresses.length > 0)
+        ? profile.addresses
+        : cachedAddresses;
+
+      if (profile.addresses && profile.addresses.length > 0) {
+        userService.saveAddressCache(profile.id, profile.addresses);
       }
 
       return {
         id: profile.id,
         email: profile.email,
         role: profile.role as UserRole,
-        name: profile.name,
+        name: finalName,
         phone: profile.phone,
         points: profile.points,
-        addresses: profile.addresses || [],
+        addresses: resolvedAddresses,
         location: profile.location,
-        allowedTabs: profile.allowedTabs || [],
+        allowedTabs: (profile as any).allowed_tabs || profile.allowedTabs || [],
+        referralCode: (profile as any).referral_code || undefined,
       };
     } catch (e) {
       console.error('Fatal error in getCurrentUser:', e);
@@ -67,54 +70,69 @@ export const authService = {
   },
 
   async loginWithPhone(phone: string) {
+    const cleanPhone = phone.replace(/\D/g, '');
     // Generate an internal email based on phone number for Supabase Auth
-    // Changed domain to bypass previously stuck test accounts safely after config update
-    const internalEmail = `guest_${phone.replace(/\D/g, '')}@gasexpress.app`;
+    const internalEmail = `guest_${cleanPhone}@gasexpress.app`;
     // For clients, we use a standard internal password for simulation in this phase
-    const internalPassword = `GasPhoneAuth${phone.replace(/\D/g, '')}`;
+    const internalPassword = `GasPhoneAuth${cleanPhone}`;
 
     try {
-      // Try to login
-      const { data, error: loginError } = await supabase.auth.signInWithPassword({
-        email: internalEmail,
-        password: internalPassword,
-      });
+      const knownKey = `gas_phone_account_${cleanPhone}`;
+      let known = false;
+      try { known = localStorage.getItem(knownKey) === '1'; } catch {}
 
-      if (!loginError) return data.user;
+      if (known) {
+        const { data, error: loginError } = await supabase.auth.signInWithPassword({
+          email: internalEmail,
+          password: internalPassword,
+        });
+        if (!loginError && data.user) return data.user;
+      }
 
-      // If login fails (user not found), try to sign up
+      // Cadastro primeiro: o signIn de quem ainda não existe responde 400 e polui o console.
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
         email: internalEmail,
         password: internalPassword,
         options: {
           data: {
-            phone,
-            role: 'cliente' as UserRole
+            phone: cleanPhone,
+            name: 'Cliente'
           }
         }
       });
 
-      if (signUpError) throw signUpError;
+      const alreadyRegistered = !!signUpError && (
+        (signUpError as any).status === 422 ||
+        /already registered|already exists|already been registered|user_already_exists/i.test(`${signUpError.message || ''} ${(signUpError as any).code || ''}`)
+      );
+      if (signUpError && !alreadyRegistered) throw signUpError;
 
-      if (signUpData.user) {
-        // Update profile instead of insert, as the row is usually created by a DB trigger
-        // which prevents explicit inserts via RLS policies.
+      const remember = () => { try { localStorage.setItem(knownKey, '1'); } catch {} };
+
+      const signUpIsNew = !signUpError && !!signUpData.session && !!signUpData.user;
+      if (signUpIsNew && signUpData.user) {
         const { error: profileError } = await supabase.from('profiles').update({
-          name: 'Cliente',
-          role: 'cliente',
-          phone,
-          points: 0,
-          addresses: [],
-          allowedTabs: []
+          phone: cleanPhone,
         }).eq('id', signUpData.user.id);
-
         if (profileError) {
-          console.error('Info: Could not update profile automatically (RLS/Trigger)', profileError);
-          // We don't throw here to avoid blocking the login flow just because of profile metadata
+          console.error('Não foi possível gravar o telefone no perfil.', profileError);
         }
+        remember();
+        return signUpData.user;
       }
 
-      return signUpData.user;
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
+        email: internalEmail,
+        password: internalPassword,
+      });
+      if (loginError) {
+        if (/email not confirmed/i.test(loginError.message || '')) {
+          throw new Error('Conta criada, mas o Supabase ainda exige confirmação de e-mail. Em Authentication > Providers > Email, desligue "Confirm email" para o cliente entrar só com o WhatsApp.');
+        }
+        throw loginError;
+      }
+      remember();
+      return data.user;
     } catch (error) {
       console.error('Error in loginWithPhone:', error);
       throw error;
@@ -141,15 +159,13 @@ export const authService = {
     }
   },
 
-  async signUp(email: string, name: string, role: UserRole, phone?: string) {
-    // In a real app, you might want to force a password or use OTP
+  async signUp(email: string, name: string, role: UserRole, phone?: string, password?: string) {
     const { data, error } = await supabase.auth.signUp({
       email,
-      password: 'TemporaryPassword123!', // You should handle this better in production
+      password: password && password.length >= 6 ? password : 'TemporaryPassword123!',
       options: {
         data: {
           name,
-          role,
           phone
         }
       }
@@ -158,19 +174,26 @@ export const authService = {
     if (error) throw error;
 
     if (data.user) {
-      // Update into profiles table (handled by DB trigger usually)
+      // O trigger grava role 'cliente'. Só um gestor (ou SQL) promove o papel.
       const { error: profileError } = await supabase
         .from('profiles')
         .update({
           name,
-          role,
-          phone,
-          points: 0,
-          addresses: []
+          phone: phone || null,
         })
         .eq('id', data.user.id);
 
-      if (profileError) console.error('Error creating profile:', profileError);
+      if (profileError) console.error('Error updating profile:', profileError);
+
+      if (role !== 'cliente') {
+        const { error: roleError } = await supabase
+          .from('profiles')
+          .update({ role })
+          .eq('id', data.user.id);
+        if (roleError) {
+          console.warn('Papel não promovido (a sessão atual não é gestor, ou a migration ainda não foi aplicada):', roleError.message);
+        }
+      }
     }
 
     return data.user;
@@ -181,53 +204,81 @@ export const authService = {
   },
 
   async getProfileForUser(userId: string, userEmail?: string, userMeta?: any): Promise<AppUser> {
+    let localName = '';
     try {
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
+      localName = localStorage.getItem('gas_app_customer_name') || '';
+    } catch {}
+
+    const cachedAddresses = userService.getAddressCache(userId);
+
+    const fallbackUser: AppUser = {
+      id: userId,
+      email: userEmail || '',
+      role: 'cliente',
+      name: (localName && localName.trim()) || userMeta?.name || 'Cliente',
+      phone: userMeta?.phone || '',
+      points: 0,
+      addresses: cachedAddresses,
+      allowedTabs: [],
+      pointHistory: userService.getPointHistory(userId)
+    };
+
+    try {
+      let profile: any = null;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', userId)
+          .maybeSingle();
+        if (data) {
+          profile = data;
+          break;
+        }
+        if (error) console.warn('Profile fetch:', error.message);
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
 
       if (profile) {
+        const finalName = (profile.name && profile.name !== 'Usuário' && profile.name !== 'Cliente')
+          ? profile.name
+          : (localName || profile.name || userMeta?.name || 'Cliente');
+
+        // Se tínhamos um nome local diferente do genérico do banco, sincroniza em background
+        if (localName && localName !== profile.name && (profile.name === 'Usuário' || profile.name === 'Cliente')) {
+          Promise.resolve(supabase.from('profiles').update({ name: localName }).eq('id', userId)).catch(() => {});
+        }
+
+        const resolvedAddresses = (profile.addresses && profile.addresses.length > 0)
+          ? profile.addresses
+          : cachedAddresses;
+
+        if (profile.addresses && profile.addresses.length > 0) {
+          userService.saveAddressCache(profile.id, profile.addresses);
+        } else if (cachedAddresses.length > 0) {
+          // Se o perfil remoto está sem endereços mas temos no cache local, sincroniza em background
+          Promise.resolve(supabase.from('profiles').update({ addresses: cachedAddresses }).eq('id', userId)).catch(() => {});
+        }
+
         return {
           id: profile.id,
           email: profile.email,
           role: profile.role as UserRole,
-          name: profile.name,
+          name: finalName,
           phone: profile.phone,
-          points: profile.points,
-          addresses: profile.addresses || [],
+          points: profile.points || 0,
+          addresses: resolvedAddresses,
           location: profile.location,
-          allowedTabs: profile.allowedTabs || [],
+          allowedTabs: (profile as any).allowed_tabs || profile.allowedTabs || [],
+          referralCode: (profile as any).referral_code || undefined,
+          pointHistory: userService.getPointHistory(profile.id)
         };
       }
 
-      // Self-healing: profile missing, create it from metadata
-      console.log('Profile missing, self-healing...');
-      const newProfile = {
-        id: userId,
-        email: userEmail,
-        name: userMeta?.name || 'Usuário',
-        role: (userMeta?.role as UserRole) || 'cliente',
-        phone: userMeta?.phone || '',
-        points: 0,
-        addresses: [],
-        allowedTabs: []
-      };
-      await supabase.from('profiles').upsert(newProfile).catch(() => {});
-      return newProfile as AppUser;
-    } catch {
-      // Fallback: return minimal user so the app never hangs
-      return {
-        id: userId,
-        email: userEmail,
-        role: (userMeta?.role as UserRole) || 'cliente',
-        name: userMeta?.name || 'Usuário',
-        phone: userMeta?.phone,
-        points: 0,
-        addresses: [],
-        allowedTabs: []
-      };
+      return fallbackUser;
+    } catch (e) {
+      console.warn('Profile fetch (usando fallback seguro):', e);
+      return fallbackUser;
     }
   },
 
